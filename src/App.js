@@ -3,6 +3,9 @@ import BaseAlpha from './base-alpha';
 import YieldPilot from './yield-pilot';
 import AgentForge from './agent-forge';
 
+// Your live backend API
+const API_URL = 'https://crypto-suite-backend-production.up.railway.app';
+
 function App() {
   const [activeApp, setActiveApp] = useState('alpha');
 
@@ -51,9 +54,9 @@ function App() {
       </div>
 
       {/* Active App */}
-      {activeApp === 'alpha' && <BaseAlpha />}
-      {activeApp === 'yield' && <YieldPilot />}
-      {activeApp === 'forge' && <AgentForge />}
+      {activeApp === 'alpha' && <BaseAlpha apiUrl={API_URL} />}
+      {activeApp === 'yield' && <YieldPilot apiUrl={API_URL} />}
+      {activeApp === 'forge' && <AgentForge apiUrl={API_URL} />}
     </div>
   );
 }
