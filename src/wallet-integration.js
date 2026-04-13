@@ -1,3 +1,4 @@
+/* eslint-disable no-undef */
 /**
  * ═══════════════════════════════════════════════════════════════
  *  COINBASE ONCHAINKIT WALLET INTEGRATION
