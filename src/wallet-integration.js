@@ -1,451 +1,362 @@
-/* eslint-disable no-undef */
 /**
- * ═══════════════════════════════════════════════════════════════
- *  COINBASE ONCHAINKIT WALLET INTEGRATION
- *  Complete React setup for all three apps
- * ═══════════════════════════════════════════════════════════════
+ * wallet-integration.js — React Hooks + ConnectButton
+ * Sovereign Crypto Suite
  *
- *  INSTALL:
- *    npm install @coinbase/onchainkit wagmi viem @tanstack/react-query ethers
- *
- *  This file provides:
- *  1. WalletProvider — wraps your entire app
- *  2. useSubscribe — hook for Base Alpha Pro subscriptions
- *  3. useVaultDeposit — hook for YieldPilot deposits
- *  4. useAgentDeploy — hook for AgentForge agent registration
- *  5. ConnectButton — styled wallet connect component
+ * ── Contract Addresses (Base Mainnet) — ALL LIVE ───────────────
+ *   BaseAlphaSubscription : 0xbB0740BDcB1927bdDC37f07f8a9B3291d35e1139
+ *   YieldPilotVault       : 0x8d0420fe81C3499D414ac3dEB2f37E8F5297df9F
+ *   AgentForgeRegistry    : 0xa67421E8d9119247708c4474BE3Dc76567fC618f
  */
 
-import React, { createContext, useContext, useState, useCallback } from 'react';
-import { ethers } from 'ethers';
+import { useState, useEffect, useCallback } from "react";
+import { ethers } from "ethers";
 
-// ═══════════════════════════════════════════════════════════════
-// CONFIG — Update these after deploying contracts
-// ═══════════════════════════════════════════════════════════════
-
-const CONFIG = {
-  chainId: 8453,  // Base Mainnet
-  chainName: 'Base',
-  rpcUrl: 'https://mainnet.base.org',
-  explorer: 'https://basescan.org',
-
-  contracts: {
-    baseAlpha:  process.env.REACT_APP_BASE_ALPHA_CONTRACT  || '0x_YOUR_CONTRACT',
-    yieldPilot: process.env.REACT_APP_YIELD_PILOT_CONTRACT || '0x_YOUR_CONTRACT',
-    agentForge: process.env.REACT_APP_AGENT_FORGE_CONTRACT || '0x_YOUR_CONTRACT',
-    usdc:       '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
-  },
-
-  // Subscription prices in ETH (update to match your contract)
-  prices: {
-    alphaMonthly:    '0.00285',    // ~$9.99
-    forgeProMonthly: '0.00828',    // ~$29
-    forgeWhaleMonthly: '0.02828',  // ~$99
-  },
+// ─────────────────────────────────────────────────────────────
+// CONTRACT ADDRESSES — all confirmed live on Base mainnet
+// ─────────────────────────────────────────────────────────────
+export const CONTRACTS = {
+  BaseAlphaSubscription: "0xbB0740BDcB1927bdDC37f07f8a9B3291d35e1139",
+  YieldPilotVault:       "0x8d0420fe81C3499D414ac3dEB2f37E8F5297df9F",
+  AgentForgeRegistry:    "0xa67421E8d9119247708c4474BE3Dc76567fC618f",
 };
 
-// ═══════════════════════════════════════════════════════════════
-// ABIs (minimal — only the functions we call from frontend)
-// ═══════════════════════════════════════════════════════════════
+export const BASE_CHAIN_ID = 8453;
 
-const BASE_ALPHA_ABI = [
-  'function subscribe(uint256 months) payable',
-  'function isActive(address user) view returns (bool)',
-  'function getExpiry(address user) view returns (uint256)',
-  'function monthlyPriceWei() view returns (uint256)',
+// ─────────────────────────────────────────────────────────────
+// ABIs
+// ─────────────────────────────────────────────────────────────
+const ABI_BASE_ALPHA = [
+  "function subscribe() external payable",
+  "function isSubscribed(address user) view returns (bool)",
+  "function subscriptionExpiry(address user) view returns (uint256)",
+  "function SUBSCRIPTION_PRICE() view returns (uint256)",
 ];
 
-const YIELD_PILOT_ABI = [
-  'function deposit(uint256 amount)',
-  'function withdraw(uint256 shares)',
-  'function getPositionValue(address user) view returns (uint256, uint256, int256)',
-  'function sharePrice() view returns (uint256)',
-  'function positions(address) view returns (uint256 deposited, uint256 shares, uint256 depositTimestamp)',
+const ABI_YIELD_PILOT = [
+  "function deposit(uint256 assets, address receiver) returns (uint256 shares)",
+  "function withdraw(uint256 assets, address receiver, address owner) returns (uint256 shares)",
+  "function balanceOf(address user) view returns (uint256)",
+  "function convertToAssets(uint256 shares) view returns (uint256)",
+  "function totalAssets() view returns (uint256)",
 ];
 
-const AGENT_FORGE_ABI = [
-  'function subscribe(uint8 tier, uint256 months) payable',
-  'function deployAgent(string templateId, string name, address agentWallet)',
-  'function toggleAgent(uint256 index)',
-  'function getSubscription(address) view returns (uint8, uint256, uint256, uint256)',
-  'function getUserAgents(address) view returns (tuple(uint256 id, address owner, string templateId, string name, address agentWallet, uint256 budget, bool active, uint256 createdAt)[])',
+const ABI_AGENT_FORGE = [
+  "function subscribe(uint8 tier) external payable",
+  "function registerAgent(string metadataURI) external returns (bytes32)",
+  "function deactivateAgent(bytes32 agentId) external",
+  "function isActive(address user) view returns (bool)",
+  "function getSubscription(address user) view returns (tuple(uint8 tier, uint256 expiry, uint256 agentSlots))",
+  "function getOwnerAgents(address owner) view returns (bytes32[])",
+  "function priceStarter() view returns (uint256)",
+  "function pricePro() view returns (uint256)",
+  "function priceEnterprise() view returns (uint256)",
 ];
 
-const ERC20_ABI = [
-  'function approve(address spender, uint256 amount) returns (bool)',
-  'function allowance(address owner, address spender) view returns (uint256)',
-  'function balanceOf(address account) view returns (uint256)',
-];
+// ─────────────────────────────────────────────────────────────
+// HELPERS
+// ─────────────────────────────────────────────────────────────
+async function getSigner() {
+  if (!window.ethereum) throw new Error("No wallet detected. Install Coinbase Wallet.");
+  const provider = new ethers.BrowserProvider(window.ethereum);
+  return provider.getSigner();
+}
 
-// ═══════════════════════════════════════════════════════════════
-// WALLET CONTEXT
-// ═══════════════════════════════════════════════════════════════
+async function ensureBaseChain(signer) {
+  const network = await signer.provider.getNetwork();
+  if (Number(network.chainId) !== BASE_CHAIN_ID) {
+    await window.ethereum.request({
+      method: "wallet_switchEthereumChain",
+      params: [{ chainId: `0x${BASE_CHAIN_ID.toString(16)}` }],
+    });
+  }
+}
 
-const WalletContext = createContext(null);
+function getReadProvider() {
+  return new ethers.JsonRpcProvider(
+    process.env.REACT_APP_BASE_RPC_URL || "https://mainnet.base.org"
+  );
+}
 
-export function WalletProvider({ children }) {
-  const [address, setAddress] = useState(null);
-  const [signer, setSigner] = useState(null);
-  const [provider, setProvider] = useState(null);
-  const [chainId, setChainId] = useState(null);
-  const [isConnecting, setIsConnecting] = useState(false);
-  const [error, setError] = useState(null);
+// ─────────────────────────────────────────────────────────────
+// useWallet
+// ─────────────────────────────────────────────────────────────
+export function useWallet() {
+  const [address,   setAddress]   = useState(null);
+  const [chainId,   setChainId]   = useState(null);
+  const [connected, setConnected] = useState(false);
+  const [loading,   setLoading]   = useState(false);
+  const [error,     setError]     = useState(null);
 
   const connect = useCallback(async () => {
-    setIsConnecting(true);
-    setError(null);
-
+    setLoading(true); setError(null);
     try {
-      // Check for injected provider (Coinbase Wallet, MetaMask, etc.)
-      if (!window.ethereum) {
-        throw new Error('No wallet found. Install Coinbase Wallet from coinbase.com/wallet');
-      }
-
-      const ethProvider = new ethers.BrowserProvider(window.ethereum);
-
-      // Request account access
-      const accounts = await ethProvider.send('eth_requestAccounts', []);
-      const ethSigner = await ethProvider.getSigner();
-      const network = await ethProvider.getNetwork();
-
-      // Switch to Base if not already
-      if (Number(network.chainId) !== CONFIG.chainId) {
-        try {
-          await window.ethereum.request({
-            method: 'wallet_switchEthereumChain',
-            params: [{ chainId: `0x${CONFIG.chainId.toString(16)}` }],
-          });
-        } catch (switchError) {
-          // Chain not added — add it
-          if (switchError.code === 4902) {
-            await window.ethereum.request({
-              method: 'wallet_addEthereumChain',
-              params: [{
-                chainId: `0x${CONFIG.chainId.toString(16)}`,
-                chainName: CONFIG.chainName,
-                nativeCurrency: { name: 'ETH', symbol: 'ETH', decimals: 18 },
-                rpcUrls: [CONFIG.rpcUrl],
-                blockExplorerUrls: [CONFIG.explorer],
-              }],
-            });
-          } else {
-            throw switchError;
-          }
-        }
-      }
-
+      if (!window.ethereum) throw new Error("No wallet detected.");
+      const accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
+      const provider = new ethers.BrowserProvider(window.ethereum);
+      const network  = await provider.getNetwork();
       setAddress(accounts[0]);
-      setSigner(ethSigner);
-      setProvider(ethProvider);
-      setChainId(CONFIG.chainId);
-
-      // Listen for account/chain changes
-      window.ethereum.on('accountsChanged', (accts) => {
-        if (accts.length === 0) disconnect();
-        else setAddress(accts[0]);
-      });
-
-      window.ethereum.on('chainChanged', () => window.location.reload());
-
-    } catch (err) {
-      setError(err.message);
-      console.error('[Wallet] Connection error:', err);
-    } finally {
-      setIsConnecting(false);
-    }
+      setChainId(Number(network.chainId));
+      setConnected(true);
+    } catch (err) { setError(err.message); }
+    finally { setLoading(false); }
   }, []);
 
   const disconnect = useCallback(() => {
-    setAddress(null);
-    setSigner(null);
-    setProvider(null);
-    setChainId(null);
+    setAddress(null); setChainId(null); setConnected(false);
   }, []);
 
-  return (
-    <WalletContext.Provider value={{
-      address, signer, provider, chainId,
-      isConnecting, error, connect, disconnect,
-      isConnected: !!address,
-    }}>
-      {children}
-    </WalletContext.Provider>
-  );
-}
+  // Auto-hydrate wallet state on mount — detects already-connected wallets
+  // without prompting the user. Uses eth_accounts (silent) not eth_requestAccounts.
+  // Also re-runs on window focus / visibility change, which handles Brave losing
+  // provider context after signMessage popups close.
+  useEffect(() => {
+    if (!window.ethereum) return;
+    let cancelled = false;
 
-export function useWallet() {
-  const ctx = useContext(WalletContext);
-  if (!ctx) throw new Error('useWallet must be inside WalletProvider');
-  return ctx;
-}
-
-// ═══════════════════════════════════════════════════════════════
-// HOOK: useSubscribe — Base Alpha Pro subscription
-// ═══════════════════════════════════════════════════════════════
-
-export function useSubscribe() {
-  const { signer, address } = useWallet();
-  const [loading, setLoading] = useState(false);
-  const [txHash, setTxHash] = useState(null);
-
-  const subscribeToPro = useCallback(async (months = 1) => {
-    if (!signer) throw new Error('Connect wallet first');
-    setLoading(true);
-
-    try {
-      const contract = new ethers.Contract(CONFIG.contracts.baseAlpha, BASE_ALPHA_ABI, signer);
-
-      // Get current price from contract
-      const monthlyPrice = await contract.monthlyPriceWei();
-      const totalPrice = monthlyPrice * BigInt(months);
-
-      // Send subscription tx
-      const tx = await contract.subscribe(months, { value: totalPrice });
-      setTxHash(tx.hash);
-
-      const receipt = await tx.wait();
-      return { success: true, hash: tx.hash, receipt };
-    } catch (err) {
-      console.error('[Subscribe] Error:', err);
-      return { success: false, error: err.reason || err.message };
-    } finally {
-      setLoading(false);
-    }
-  }, [signer]);
-
-  const checkSubscription = useCallback(async () => {
-    if (!signer || !address) return null;
-    const contract = new ethers.Contract(CONFIG.contracts.baseAlpha, BASE_ALPHA_ABI, signer);
-    const isActive = await contract.isActive(address);
-    const expiry = await contract.getExpiry(address);
-    return { isActive, expiry: Number(expiry) };
-  }, [signer, address]);
-
-  return { subscribeToPro, checkSubscription, loading, txHash };
-}
-
-// ═══════════════════════════════════════════════════════════════
-// HOOK: useVaultDeposit — YieldPilot deposit/withdraw
-// ═══════════════════════════════════════════════════════════════
-
-export function useVaultDeposit() {
-  const { signer, address } = useWallet();
-  const [loading, setLoading] = useState(false);
-  const [step, setStep] = useState(''); // 'approving', 'depositing', 'done'
-
-  const deposit = useCallback(async (amountUsdc) => {
-    if (!signer) throw new Error('Connect wallet first');
-    setLoading(true);
-
-    try {
-      // USDC has 6 decimals
-      const amount = ethers.parseUnits(amountUsdc.toString(), 6);
-
-      // Step 1: Check allowance
-      setStep('approving');
-      const usdc = new ethers.Contract(CONFIG.contracts.usdc, ERC20_ABI, signer);
-      const currentAllowance = await usdc.allowance(address, CONFIG.contracts.yieldPilot);
-
-      if (currentAllowance < amount) {
-        const approveTx = await usdc.approve(CONFIG.contracts.yieldPilot, amount);
-        await approveTx.wait();
+    const hydrate = async () => {
+      try {
+        const accounts = await window.ethereum.request({ method: "eth_accounts" });
+        if (cancelled) return;
+        if (accounts && accounts.length > 0) {
+          const provider = new ethers.BrowserProvider(window.ethereum);
+          const network  = await provider.getNetwork();
+          if (cancelled) return;
+          setAddress(accounts[0]);
+          setChainId(Number(network.chainId));
+          setConnected(true);
+        } else {
+          // Wallet actually disconnected — clear state
+          setAddress(null);
+          setConnected(false);
+        }
+      } catch (err) {
+        console.warn("[useWallet] hydrate failed:", err.message);
       }
-
-      // Step 2: Deposit
-      setStep('depositing');
-      const vault = new ethers.Contract(CONFIG.contracts.yieldPilot, YIELD_PILOT_ABI, signer);
-      const tx = await vault.deposit(amount);
-      const receipt = await tx.wait();
-
-      setStep('done');
-      return { success: true, hash: tx.hash, receipt };
-    } catch (err) {
-      console.error('[Deposit] Error:', err);
-      return { success: false, error: err.reason || err.message };
-    } finally {
-      setLoading(false);
-      setStep('');
-    }
-  }, [signer, address]);
-
-  const withdraw = useCallback(async (shares) => {
-    if (!signer) throw new Error('Connect wallet first');
-    setLoading(true);
-
-    try {
-      const vault = new ethers.Contract(CONFIG.contracts.yieldPilot, YIELD_PILOT_ABI, signer);
-      const tx = await vault.withdraw(shares);
-      const receipt = await tx.wait();
-      return { success: true, hash: tx.hash, receipt };
-    } catch (err) {
-      return { success: false, error: err.reason || err.message };
-    } finally {
-      setLoading(false);
-    }
-  }, [signer]);
-
-  const getPosition = useCallback(async () => {
-    if (!signer || !address) return null;
-    const vault = new ethers.Contract(CONFIG.contracts.yieldPilot, YIELD_PILOT_ABI, signer);
-    const [currentValue, costBasis, pnl] = await vault.getPositionValue(address);
-    const pos = await vault.positions(address);
-    return {
-      currentValue: ethers.formatUnits(currentValue, 6),
-      costBasis: ethers.formatUnits(costBasis, 6),
-      pnl: ethers.formatUnits(pnl, 6),
-      shares: pos.shares.toString(),
     };
-  }, [signer, address]);
 
-  return { deposit, withdraw, getPosition, loading, step };
+    hydrate();
+
+    const onFocus = () => hydrate();
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") hydrate();
+    };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisibility);
+
+    return () => {
+      cancelled = true;
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!window.ethereum) return;
+    const onAccounts = (accounts) => {
+      if (accounts.length === 0) disconnect();
+      else { setAddress(accounts[0]); setConnected(true); }
+    };
+    const onChain    = (id) => setChainId(parseInt(id, 16));
+    window.ethereum.on("accountsChanged", onAccounts);
+    window.ethereum.on("chainChanged",    onChain);
+    return () => {
+      window.ethereum.removeListener("accountsChanged", onAccounts);
+      window.ethereum.removeListener("chainChanged",    onChain);
+    };
+  }, [disconnect]);
+
+  // Lazy signer getter — agent-forge.jsx uses `signer.signMessage()` for EIP-191.
+  // We expose a thin wrapper that provides getAddress() and signMessage() on demand,
+  // resolving the actual ethers.Signer only when called (async under the hood).
+  const signer = connected && window.ethereum
+    ? {
+        getAddress: async () => {
+          const p = new ethers.BrowserProvider(window.ethereum);
+          const s = await p.getSigner();
+          return s.getAddress();
+        },
+        signMessage: async (message) => {
+          const p = new ethers.BrowserProvider(window.ethereum);
+          const s = await p.getSigner();
+          return s.signMessage(message);
+        },
+      }
+    : null;
+
+  // Expose both `connected` (original) and `isConnected` (what agent-forge.jsx expects)
+  return {
+    address,
+    chainId,
+    connected,
+    isConnected: connected,
+    signer,
+    loading,
+    error,
+    connect,
+    disconnect,
+  };
 }
 
-// ═══════════════════════════════════════════════════════════════
-// HOOK: useAgentDeploy — AgentForge deployment
-// ═══════════════════════════════════════════════════════════════
+// ─────────────────────────────────────────────────────────────
+// useSubscribe — Base Alpha
+// ─────────────────────────────────────────────────────────────
+export function useSubscribe() {
+  const [loading, setLoading] = useState(false);
+  const [error,   setError]   = useState(null);
+  const [txHash,  setTxHash]  = useState(null);
+
+  const subscribe = useCallback(async () => {
+    setLoading(true); setError(null); setTxHash(null);
+    try {
+      const signer   = await getSigner();
+      await ensureBaseChain(signer);
+      const contract = new ethers.Contract(CONTRACTS.BaseAlphaSubscription, ABI_BASE_ALPHA, signer);
+      const price    = await contract.SUBSCRIPTION_PRICE();
+      const tx       = await contract.subscribe({ value: price });
+      setTxHash(tx.hash);
+      await tx.wait();
+      return tx.hash;
+    } catch (err) { setError(err.message); throw err; }
+    finally { setLoading(false); }
+  }, []);
+
+  const checkSubscription = useCallback(async (address) => {
+    if (!address) return null;
+    try {
+      const contract = new ethers.Contract(CONTRACTS.BaseAlphaSubscription, ABI_BASE_ALPHA, getReadProvider());
+      const [isActive, expiry] = await Promise.all([
+        contract.isSubscribed(address),
+        contract.subscriptionExpiry(address),
+      ]);
+      return { isActive, expiry: Number(expiry), expiryDate: new Date(Number(expiry) * 1000) };
+    } catch (err) { console.error("checkSubscription error:", err); return null; }
+  }, []);
+
+  return { subscribe, checkSubscription, loading, error, txHash };
+}
+
+// ─────────────────────────────────────────────────────────────
+// useVaultDeposit — YieldPilot
+// ─────────────────────────────────────────────────────────────
+export function useVaultDeposit() {
+  const [loading, setLoading] = useState(false);
+  const [error,   setError]   = useState(null);
+  const [txHash,  setTxHash]  = useState(null);
+
+  const deposit = useCallback(async (usdcAmount) => {
+    setLoading(true); setError(null); setTxHash(null);
+    try {
+      const signer   = await getSigner();
+      await ensureBaseChain(signer);
+      const address  = await signer.getAddress();
+      const assets   = ethers.parseUnits(usdcAmount.toString(), 6);
+      const contract = new ethers.Contract(CONTRACTS.YieldPilotVault, ABI_YIELD_PILOT, signer);
+      const tx       = await contract.deposit(assets, address);
+      setTxHash(tx.hash);
+      await tx.wait();
+      return tx.hash;
+    } catch (err) { setError(err.message); throw err; }
+    finally { setLoading(false); }
+  }, []);
+
+  const getPosition = useCallback(async (address) => {
+    if (!address) return null;
+    try {
+      const contract = new ethers.Contract(CONTRACTS.YieldPilotVault, ABI_YIELD_PILOT, getReadProvider());
+      const shares   = await contract.balanceOf(address);
+      const assets   = shares > 0n ? await contract.convertToAssets(shares) : 0n;
+      return { shares: ethers.formatUnits(shares, 6), assets: ethers.formatUnits(assets, 6) };
+    } catch (err) { console.error("getPosition error:", err); return null; }
+  }, []);
+
+  return { deposit, getPosition, loading, error, txHash };
+}
+
+// ─────────────────────────────────────────────────────────────
+// useAgentDeploy — AgentForge
+// ─────────────────────────────────────────────────────────────
+export const AGENT_FORGE_TIERS = { Starter: 1, Pro: 2, Enterprise: 3 };
 
 export function useAgentDeploy() {
-  const { signer, address } = useWallet();
   const [loading, setLoading] = useState(false);
+  const [error,   setError]   = useState(null);
+  const [txHash,  setTxHash]  = useState(null);
 
-  const subscribeToForge = useCallback(async (tier, months = 1) => {
-    if (!signer) throw new Error('Connect wallet first');
-    setLoading(true);
-
+  const subscribeAgentForge = useCallback(async (tier) => {
+    setLoading(true); setError(null); setTxHash(null);
     try {
-      const contract = new ethers.Contract(CONFIG.contracts.agentForge, AGENT_FORGE_ABI, signer);
-      const tierEnum = tier === 'pro' ? 1 : 2; // Pro=1, Whale=2
-      const price = tier === 'pro'
-        ? ethers.parseEther(CONFIG.prices.forgeProMonthly)
-        : ethers.parseEther(CONFIG.prices.forgeWhaleMonthly);
+      const signer   = await getSigner();
+      await ensureBaseChain(signer);
+      const contract = new ethers.Contract(CONTRACTS.AgentForgeRegistry, ABI_AGENT_FORGE, signer);
+      const priceMap = {
+        [AGENT_FORGE_TIERS.Starter]:    await contract.priceStarter(),
+        [AGENT_FORGE_TIERS.Pro]:        await contract.pricePro(),
+        [AGENT_FORGE_TIERS.Enterprise]: await contract.priceEnterprise(),
+      };
+      const tx = await contract.subscribe(tier, { value: priceMap[tier] });
+      setTxHash(tx.hash);
+      await tx.wait();
+      return tx.hash;
+    } catch (err) { setError(err.message); throw err; }
+    finally { setLoading(false); }
+  }, []);
 
-      const tx = await contract.subscribe(tierEnum, months, { value: price * BigInt(months) });
-      const receipt = await tx.wait();
-      return { success: true, hash: tx.hash, receipt };
-    } catch (err) {
-      return { success: false, error: err.reason || err.message };
-    } finally {
-      setLoading(false);
-    }
-  }, [signer]);
-
-  const deployAgent = useCallback(async (templateId, name, agentWallet) => {
-    if (!signer) throw new Error('Connect wallet first');
-    setLoading(true);
-
+  const registerAgent = useCallback(async (metadataURI) => {
+    setLoading(true); setError(null);
     try {
-      const contract = new ethers.Contract(CONFIG.contracts.agentForge, AGENT_FORGE_ABI, signer);
-      const tx = await contract.deployAgent(templateId, name, agentWallet);
-      const receipt = await tx.wait();
-      return { success: true, hash: tx.hash, receipt };
-    } catch (err) {
-      return { success: false, error: err.reason || err.message };
-    } finally {
-      setLoading(false);
-    }
-  }, [signer]);
+      const signer   = await getSigner();
+      await ensureBaseChain(signer);
+      const contract = new ethers.Contract(CONTRACTS.AgentForgeRegistry, ABI_AGENT_FORGE, signer);
+      const tx       = await contract.registerAgent(metadataURI);
+      setTxHash(tx.hash);
+      const receipt  = await tx.wait();
+      const event    = receipt.logs
+        .map(log => { try { return contract.interface.parseLog(log); } catch { return null; } })
+        .find(e => e?.name === "AgentRegistered");
+      return { txHash: tx.hash, agentId: event?.args?.agentId || null };
+    } catch (err) { setError(err.message); throw err; }
+    finally { setLoading(false); }
+  }, []);
 
-  const toggleAgent = useCallback(async (index) => {
-    if (!signer) throw new Error('Connect wallet first');
-    const contract = new ethers.Contract(CONFIG.contracts.agentForge, AGENT_FORGE_ABI, signer);
-    const tx = await contract.toggleAgent(index);
-    return tx.wait();
-  }, [signer]);
+  const getAgentForgeStatus = useCallback(async (address) => {
+    if (!address) return null;
+    try {
+      const contract = new ethers.Contract(CONTRACTS.AgentForgeRegistry, ABI_AGENT_FORGE, getReadProvider());
+      const [isActive, sub, agentIds] = await Promise.all([
+        contract.isActive(address),
+        contract.getSubscription(address),
+        contract.getOwnerAgents(address),
+      ]);
+      const tierNames = ["None", "Starter", "Pro", "Enterprise"];
+      return { isActive, tier: tierNames[sub.tier], expiry: Number(sub.expiry), agentSlots: Number(sub.agentSlots), agentCount: agentIds.length, agentIds };
+    } catch (err) { console.error("getAgentForgeStatus error:", err); return null; }
+  }, []);
 
-  const getAgents = useCallback(async () => {
-    if (!signer || !address) return [];
-    const contract = new ethers.Contract(CONFIG.contracts.agentForge, AGENT_FORGE_ABI, signer);
-    return contract.getUserAgents(address);
-  }, [signer, address]);
-
-  const getSubscription = useCallback(async () => {
-    if (!signer || !address) return null;
-    const contract = new ethers.Contract(CONFIG.contracts.agentForge, AGENT_FORGE_ABI, signer);
-    const [tier, expiry, used, allowed] = await contract.getSubscription(address);
-    return { tier: ['Free', 'Pro', 'Whale'][tier], expiry: Number(expiry), agentsUsed: Number(used), agentsAllowed: Number(allowed) };
-  }, [signer, address]);
-
-  return { subscribeToForge, deployAgent, toggleAgent, getAgents, getSubscription, loading };
+  return { subscribeAgentForge, registerAgent, getAgentForgeStatus, loading, error, txHash };
 }
 
-// ═══════════════════════════════════════════════════════════════
-// COMPONENT: ConnectButton
-// ═══════════════════════════════════════════════════════════════
+// ─────────────────────────────────────────────────────────────
+// ConnectButton
+// ─────────────────────────────────────────────────────────────
+export function ConnectButton({ onConnect, onDisconnect, className = "" }) {
+  const { address, chainId, connected, loading, error, connect, disconnect } = useWallet();
+  const isWrongChain = connected && chainId !== BASE_CHAIN_ID;
 
-export function ConnectButton({ style = {} }) {
-  const { address, isConnected, isConnecting, connect, disconnect } = useWallet();
+  useEffect(() => { if (connected && address) onConnect?.(address); }, [connected, address, onConnect]);
 
-  if (isConnected) {
-    return (
-      <button
-        onClick={disconnect}
-        style={{
-          padding: '8px 16px', borderRadius: 8, fontSize: 13, fontWeight: 600,
-          background: 'rgba(34,197,94,0.1)', color: '#22c55e',
-          border: '1px solid rgba(34,197,94,0.2)', cursor: 'pointer', ...style,
-        }}
-      >
-        {address.slice(0, 6)}...{address.slice(-4)}
-      </button>
-    );
-  }
+  const switchChain = () => window.ethereum.request({
+    method: "wallet_switchEthereumChain",
+    params: [{ chainId: `0x${BASE_CHAIN_ID.toString(16)}` }],
+  });
+
+  if (loading)      return <button disabled className={`connect-btn connect-btn--loading ${className}`}>Connecting...</button>;
+  if (isWrongChain) return <button onClick={switchChain} className={`connect-btn connect-btn--wrong-chain ${className}`}>Switch to Base</button>;
+  if (connected)    return <button onClick={() => { disconnect(); onDisconnect?.(); }} className={`connect-btn connect-btn--connected ${className}`}>{address.slice(0,6)}...{address.slice(-4)}</button>;
 
   return (
-    <button
-      onClick={connect}
-      disabled={isConnecting}
-      style={{
-        padding: '8px 16px', borderRadius: 8, fontSize: 13, fontWeight: 600,
-        background: 'linear-gradient(135deg, #0052ff, #3380ff)', color: '#fff',
-        border: 'none', cursor: 'pointer', opacity: isConnecting ? 0.7 : 1, ...style,
-      }}
-    >
-      {isConnecting ? 'Connecting...' : 'Connect Wallet'}
-    </button>
+    <div className={`connect-btn-wrapper ${className}`}>
+      <button onClick={connect} className="connect-btn">Connect Wallet</button>
+      {error && <p className="connect-btn__error">{error}</p>}
+    </div>
   );
 }
-
-// ═══════════════════════════════════════════════════════════════
-// EXAMPLE: How to wire it into your App.jsx
-// ═══════════════════════════════════════════════════════════════
-/*
-
-import { WalletProvider, ConnectButton, useSubscribe } from './wallet-integration';
-import BaseAlpha from './base-alpha';
-import YieldPilot from './yield-pilot';
-import AgentForge from './agent-forge';
-
-function App() {
-  return (
-    <WalletProvider>
-      <div>
-        <header>
-          <ConnectButton />
-        </header>
-        <BaseAlpha />
-      </div>
-    </WalletProvider>
-  );
-}
-
-// Inside BaseAlpha component, use the hooks:
-function SubscribeButton() {
-  const { subscribeToPro, loading } = useSubscribe();
-
-  const handleSubscribe = async () => {
-    const result = await subscribeToPro(1); // 1 month
-    if (result.success) {
-      alert('Subscribed! Tx: ' + result.hash);
-    } else {
-      alert('Failed: ' + result.error);
-    }
-  };
-
-  return (
-    <button onClick={handleSubscribe} disabled={loading}>
-      {loading ? 'Confirming...' : 'Subscribe $9.99/mo'}
-    </button>
-  );
-}
-
-*/
