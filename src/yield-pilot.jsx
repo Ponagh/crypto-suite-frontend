@@ -22,11 +22,10 @@ const RPC_URLS = [
 const VAULT_ABI = [
   "function totalAssets() view returns (uint256)",
   "function totalShares() view returns (uint256)",
-  "function totalDeposited() view returns (uint256)",
-  "function pricePerShare() view returns (uint256)",
-  "function userPositions(address) view returns (uint256 shares, uint256 depositedAmount, uint256 depositedAt)",
+  "function totalDeposits() view returns (uint256)",
+  "function sharePrice() view returns (uint256)",
+  "function positions(address) view returns (uint256 deposited, uint256 shares, uint256 depositTimestamp)",
   "function paused() view returns (bool)",
-  "function performanceFee() view returns (uint256)",
 ];
 
 const USDC_ABI = ["function balanceOf(address) view returns (uint256)"];
@@ -230,22 +229,21 @@ export default function YieldPilot({ apiUrl }) {
       const rpc = await getWorkingProvider();
       const vault = new ethers.Contract(YIELD_PILOT_VAULT, VAULT_ABI, rpc);
 
-      // Use individual tries — if totalShares is 0, pricePerShare reverts (div by zero)
+      // Use individual tries — if totalShares is 0, sharePrice reverts (div by zero)
       // so handle it gracefully
-      const [totalAssetsRaw, totalSharesRaw, totalDepositedRaw, pausedRaw, perfFeeRaw] =
+      const [totalAssetsRaw, totalSharesRaw, totalDepositedRaw, pausedRaw] =
         await Promise.all([
           vault.totalAssets().catch(() => 0n),
           vault.totalShares().catch(() => 0n),
-          vault.totalDeposited().catch(() => 0n),
+          vault.totalDeposits().catch(() => 0n),
           vault.paused().catch(() => false),
-          vault.performanceFee().catch(() => 0n),
         ]);
 
-      // Only call pricePerShare if vault has shares
-      let pricePerShareRaw = 1000000000000000000n; // 1e18 default
+      // Only call sharePrice if vault has shares
+      let sharePriceRaw = 1000000000000000000n; // 1e18 default (sharePrice is 1e18-scaled per contract)
       if (totalSharesRaw > 0n) {
         try {
-          pricePerShareRaw = await vault.pricePerShare();
+          sharePriceRaw = await vault.sharePrice();
         } catch {
           // fallback to 1.0
         }
@@ -253,21 +251,22 @@ export default function YieldPilot({ apiUrl }) {
 
       setVaultStats({
         totalAssets: Number(ethers.formatUnits(totalAssetsRaw, 6)),
-        totalShares: Number(ethers.formatUnits(totalSharesRaw, 18)),
+        totalShares: Number(ethers.formatUnits(totalSharesRaw, 6)),       // shares scale 1:1 with USDC (6dp)
         totalDeposited: Number(ethers.formatUnits(totalDepositedRaw, 6)),
-        pricePerShare: Number(ethers.formatUnits(pricePerShareRaw, 18)),
+        pricePerShare: Number(ethers.formatUnits(sharePriceRaw, 18)),     // sharePrice is 1e18-scaled
         paused: pausedRaw,
-        performanceFeePercent: Number(perfFeeRaw) / 100,
+        performanceFeePercent: 0.5,                                        // PERFORMANCE_FEE_BPS = 50 = 0.5%
         isEmpty: totalSharesRaw === 0n,
       });
 
       if (address) {
         try {
-          const pos = await vault.userPositions(address);
+          // positions() returns (deposited, shares, depositTimestamp) — NOT (shares, deposited, timestamp)
+          const pos = await vault.positions(address);
           setUserPosition({
-            shares: Number(ethers.formatUnits(pos[0], 18)),
-            depositedAmount: Number(ethers.formatUnits(pos[1], 6)),
-            depositedAt: Number(pos[2]),
+            shares: Number(ethers.formatUnits(pos[1], 6)),            // shares at index 1, 6 decimals
+            depositedAmount: Number(ethers.formatUnits(pos[0], 6)),   // deposited at index 0
+            depositedAt: Number(pos[2]),                              // timestamp at index 2
           });
         } catch {
           setUserPosition({ shares: 0, depositedAmount: 0, depositedAt: 0 });
@@ -286,7 +285,7 @@ export default function YieldPilot({ apiUrl }) {
       // Set empty defaults so UI still renders
       setVaultStats({
         totalAssets: 0, totalShares: 0, totalDeposited: 0,
-        pricePerShare: 1, paused: false, performanceFeePercent: 0, isEmpty: true,
+        pricePerShare: 1, paused: false, performanceFeePercent: 0.5, isEmpty: true,
       });
     } finally {
       setVaultLoading(false);
@@ -323,8 +322,8 @@ export default function YieldPilot({ apiUrl }) {
     if (!deposit) return setTxStatus({ type: "error", message: "Wallet hook not available" });
     setTxStatus({ type: "pending", message: "Approve & deposit pending..." });
     try {
-      const tx = await deposit(amount);
-      setTxStatus({ type: "success", message: `✓ Deposited — tx: ${tx?.hash?.slice(0, 12)}...` });
+      const txHash = await deposit(amount);
+      setTxStatus({ type: "success", message: `✓ Deposited — tx: ${txHash?.slice(0, 12)}...` });
       await fetchVaultData();
       setTimeout(() => { setModalOpen(false); setTxStatus(null); }, 2500);
     } catch (e) { setTxStatus({ type: "error", message: e.message || "Deposit failed" }); }
@@ -334,8 +333,8 @@ export default function YieldPilot({ apiUrl }) {
     if (!withdraw) return setTxStatus({ type: "error", message: "Wallet hook not available" });
     setTxStatus({ type: "pending", message: "Withdrawal pending..." });
     try {
-      const tx = await withdraw(shares);
-      setTxStatus({ type: "success", message: `✓ Withdrawn — tx: ${tx?.hash?.slice(0, 12)}...` });
+      const txHash = await withdraw(shares);
+      setTxStatus({ type: "success", message: `✓ Withdrawn — tx: ${txHash?.slice(0, 12)}...` });
       await fetchVaultData();
       setTimeout(() => { setModalOpen(false); setTxStatus(null); }, 2500);
     } catch (e) { setTxStatus({ type: "error", message: e.message || "Withdraw failed" }); }

@@ -32,12 +32,30 @@ const ABI_BASE_ALPHA = [
   "function SUBSCRIPTION_PRICE() view returns (uint256)",
 ];
 
+// YieldPilotVault — NOT ERC-4626. Custom shares-based vault.
+// See contracts/YieldPilotVault.sol for reference.
 const ABI_YIELD_PILOT = [
-  "function deposit(uint256 assets, address receiver) returns (uint256 shares)",
-  "function withdraw(uint256 assets, address receiver, address owner) returns (uint256 shares)",
-  "function balanceOf(address user) view returns (uint256)",
-  "function convertToAssets(uint256 shares) view returns (uint256)",
+  // Core actions
+  "function deposit(uint256 amount)",
+  "function withdraw(uint256 sharesToWithdraw)",
+  // View — basics
   "function totalAssets() view returns (uint256)",
+  "function totalShares() view returns (uint256)",
+  "function totalDeposits() view returns (uint256)",
+  "function sharePrice() view returns (uint256)",
+  "function paused() view returns (bool)",
+  // View — user position
+  "function positions(address) view returns (uint256 deposited, uint256 shares, uint256 depositTimestamp)",
+  "function getPositionValue(address) view returns (uint256 currentValue, uint256 costBasis, int256 pnl)",
+];
+
+// USDC on Base Mainnet (6 decimals)
+const USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+
+const ABI_USDC = [
+  "function allowance(address owner, address spender) view returns (uint256)",
+  "function approve(address spender, uint256 amount) returns (bool)",
+  "function balanceOf(address) view returns (uint256)",
 ];
 
 const ABI_AGENT_FORGE = [
@@ -246,12 +264,41 @@ export function useVaultDeposit() {
   const deposit = useCallback(async (usdcAmount) => {
     setLoading(true); setError(null); setTxHash(null);
     try {
-      const signer   = await getSigner();
+      const signer  = await getSigner();
       await ensureBaseChain(signer);
-      const address  = await signer.getAddress();
-      const assets   = ethers.parseUnits(usdcAmount.toString(), 6);
-      const contract = new ethers.Contract(CONTRACTS.YieldPilotVault, ABI_YIELD_PILOT, signer);
-      const tx       = await contract.deposit(assets, address);
+      const address = await signer.getAddress();
+      const amount  = ethers.parseUnits(usdcAmount.toString(), 6);
+
+      const vault = new ethers.Contract(CONTRACTS.YieldPilotVault, ABI_YIELD_PILOT, signer);
+      const usdc  = new ethers.Contract(USDC_BASE,                 ABI_USDC,         signer);
+
+      // Step 1: Check current USDC allowance for the vault. If insufficient, approve.
+      // (Contract's deposit() calls safeTransferFrom internally — without allowance it reverts.)
+      const currentAllowance = await usdc.allowance(address, CONTRACTS.YieldPilotVault);
+      if (currentAllowance < amount) {
+        const approveTx = await usdc.approve(CONTRACTS.YieldPilotVault, amount);
+        await approveTx.wait();
+      }
+
+      // Step 2: Deposit (single uint256 arg, matches contract signature)
+      const tx = await vault.deposit(amount);
+      setTxHash(tx.hash);
+      await tx.wait();
+      return tx.hash;
+    } catch (err) { setError(err.message); throw err; }
+    finally { setLoading(false); }
+  }, []);
+
+  const withdraw = useCallback(async (sharesAmount) => {
+    setLoading(true); setError(null); setTxHash(null);
+    try {
+      const signer = await getSigner();
+      await ensureBaseChain(signer);
+      // Shares are 6-decimal scaled (1:1 with USDC on first deposit per contract logic)
+      const shares = ethers.parseUnits(sharesAmount.toString(), 6);
+
+      const vault = new ethers.Contract(CONTRACTS.YieldPilotVault, ABI_YIELD_PILOT, signer);
+      const tx    = await vault.withdraw(shares);
       setTxHash(tx.hash);
       await tx.wait();
       return tx.hash;
@@ -262,14 +309,19 @@ export function useVaultDeposit() {
   const getPosition = useCallback(async (address) => {
     if (!address) return null;
     try {
-      const contract = new ethers.Contract(CONTRACTS.YieldPilotVault, ABI_YIELD_PILOT, getReadProvider());
-      const shares   = await contract.balanceOf(address);
-      const assets   = shares > 0n ? await contract.convertToAssets(shares) : 0n;
-      return { shares: ethers.formatUnits(shares, 6), assets: ethers.formatUnits(assets, 6) };
+      const vault = new ethers.Contract(CONTRACTS.YieldPilotVault, ABI_YIELD_PILOT, getReadProvider());
+      const [currentValue, costBasis, pnl] = await vault.getPositionValue(address);
+      const [, shares] = await vault.positions(address); // [deposited, shares, depositTimestamp]
+      return {
+        shares:       ethers.formatUnits(shares,       6),
+        currentValue: ethers.formatUnits(currentValue, 6),
+        costBasis:    ethers.formatUnits(costBasis,    6),
+        pnl:          ethers.formatUnits(pnl,          6), // int256, can be negative
+      };
     } catch (err) { console.error("getPosition error:", err); return null; }
   }, []);
 
-  return { deposit, getPosition, loading, error, txHash };
+  return { deposit, withdraw, getPosition, loading, error, txHash };
 }
 
 // ─────────────────────────────────────────────────────────────
