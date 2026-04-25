@@ -6,7 +6,7 @@ import AgentForge from './agent-forge';
 import Admin from './admin';
 import './App.css';
 
-const API_URL = 'https://crypto-suite-backend-production.up.railway.app';
+const API_URL = process.env.REACT_APP_API_BASE || 'https://crypto-suite-backend-production.up.railway.app';
 const ADMIN_WALLET = '0x27b234fe6cccba56e82d3310e2cc5ce59480c59e';
 
 const BASE_APPS = [
