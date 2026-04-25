@@ -1,6 +1,10 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { ethers } from "ethers";
 import { useWallet } from "./wallet-integration";
+import {
+  LineChart, Line, AreaChart, Area, ResponsiveContainer,
+  Tooltip, ReferenceLine, YAxis,
+} from "recharts";
 
 /*
  * ════════════════════════════════════════════════════════════════════════════════
@@ -52,6 +56,10 @@ const hydrateAgent = (row) => {
     color: row.color || tpl.color || "#00ffee",
     strategy: row.strategy_name || tpl.name || row.template_id,
     deployedAtMs: new Date(row.deployed_at).getTime(),
+    // Wave 1 chart fields — from /api/agents/dashboard/:address
+    series: Array.isArray(row.series) ? row.series : [],
+    confidence_score: row.confidence_score != null ? Number(row.confidence_score) : null,
+    drawdown_pct: row.drawdown_pct != null ? Number(row.drawdown_pct) : null,
   };
 };
 
@@ -226,6 +234,171 @@ function SubscriptionCard({ subscription, isAllowlisted, onUpgrade }) {
   );
 }
 
+// ─── Wave 1 chart components ───────────────────────────────────────────────
+// Compact telemetry visualizations matching the AgentForge sci-fi palette.
+// Drop in inside AgentCard after the existing metric row.
+
+function confidenceColor(score) {
+  if (score == null) return "#6a6a82";
+  if (score >= 70) return "#00ff88";
+  if (score >= 40) return "#ff9500";
+  return "#ff2d92";
+}
+function confidenceLabel(score) {
+  if (score == null) return "—";
+  if (score >= 70) return "HEALTHY";
+  if (score >= 40) return "CAUTION";
+  return "UNHEALTHY";
+}
+
+function ChartTooltip({ active, payload, accentColor }) {
+  if (!active || !payload?.[0]) return null;
+  const d = payload[0].payload;
+  const time = d.recorded_at ? new Date(d.recorded_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+  return (
+    <div style={{
+      background: "rgba(5,5,12,0.95)",
+      border: `1px solid ${accentColor}66`,
+      padding: "6px 10px",
+      fontSize: 10,
+      fontFamily: '"JetBrains Mono", monospace',
+      color: "#dcdce5",
+    }}>
+      {time && <div style={{ color: "#6a6a82", marginBottom: 2 }}>{time}</div>}
+      {d.pnl !== undefined && <div>pnl: <span style={{ color: d.pnl >= 0 ? "#00ff88" : "#ff2d92" }}>{fmtUsd(d.pnl)}</span></div>}
+      {d.confidence_score !== undefined && <div>conf: <span style={{ color: confidenceColor(d.confidence_score) }}>{d.confidence_score}</span></div>}
+      {d.drawdown_pct !== undefined && <div>dd: <span style={{ color: "#ff2d92" }}>{Number(d.drawdown_pct).toFixed(2)}%</span></div>}
+    </div>
+  );
+}
+
+function EquitySparkline({ series, color }) {
+  const data = (series || []).filter(p => p.recorded_at);
+  if (data.length < 2) return (
+    <div style={{ height: 50, display: "flex", alignItems: "center", justifyContent: "center", border: "1px dashed rgba(0,255,238,0.15)", fontSize: 9, fontFamily: '"JetBrains Mono", monospace', color: "#6a6a82", letterSpacing: "0.1em" }}>
+      [ COLLECTING_TELEMETRY ]
+    </div>
+  );
+  const lastPnl = Number(data[data.length - 1].pnl) || 0;
+  const lineColor = lastPnl >= 0 ? "#00ff88" : "#ff2d92";
+  return (
+    <ResponsiveContainer width="100%" height={50}>
+      <LineChart data={data} margin={{ top: 2, right: 2, bottom: 2, left: 2 }}>
+        <YAxis hide domain={["dataMin", "dataMax"]} />
+        <ReferenceLine y={0} stroke="#6a6a82" strokeDasharray="2 2" strokeOpacity={0.5} />
+        <Tooltip content={<ChartTooltip accentColor={color} />} cursor={{ stroke: color, strokeOpacity: 0.3, strokeDasharray: "2 2" }} />
+        <Line type="monotone" dataKey="pnl" stroke={lineColor} strokeWidth={1.5} dot={false} isAnimationActive={false} />
+      </LineChart>
+    </ResponsiveContainer>
+  );
+}
+
+function ConfidenceMini({ series, currentScore, color }) {
+  const data = (series || []).filter(p => p.recorded_at && p.confidence_score != null);
+  const cc = confidenceColor(currentScore);
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+        <span style={{ fontSize: 8, color: "#6a6a82", fontFamily: '"JetBrains Mono", monospace', letterSpacing: "0.12em" }}>CONFIDENCE</span>
+        <span style={{ fontSize: 9, color: cc, fontFamily: '"JetBrains Mono", monospace', fontWeight: 700, letterSpacing: "0.1em" }}>
+          {currentScore != null ? currentScore : "—"} · {confidenceLabel(currentScore)}
+        </span>
+      </div>
+      {data.length > 1 ? (
+        <ResponsiveContainer width="100%" height={28}>
+          <AreaChart data={data} margin={{ top: 2, right: 2, bottom: 2, left: 2 }}>
+            <defs>
+              <linearGradient id={`conf-grad-${currentScore}-${data.length}`} x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={cc} stopOpacity={0.5} />
+                <stop offset="100%" stopColor={cc} stopOpacity={0} />
+              </linearGradient>
+            </defs>
+            <YAxis hide domain={[0, 100]} />
+            <ReferenceLine y={70} stroke="#00ff88" strokeDasharray="1 3" strokeOpacity={0.3} />
+            <ReferenceLine y={40} stroke="#ff2d92" strokeDasharray="1 3" strokeOpacity={0.3} />
+            <Tooltip content={<ChartTooltip accentColor={color} />} cursor={false} />
+            <Area type="monotone" dataKey="confidence_score" stroke={cc} fill={`url(#conf-grad-${currentScore}-${data.length})`} strokeWidth={1} isAnimationActive={false} />
+          </AreaChart>
+        </ResponsiveContainer>
+      ) : (
+        <div style={{ height: 28, display: "flex", alignItems: "center", fontSize: 8, color: "#6a6a82", fontFamily: '"JetBrains Mono", monospace' }}>—</div>
+      )}
+    </div>
+  );
+}
+
+function DrawdownMini({ series, currentDd, color }) {
+  const data = (series || []).filter(p => p.recorded_at && p.drawdown_pct != null);
+  const ddColor = currentDd != null && currentDd <= -5 ? "#ff2d92" : "#ff9500";
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+        <span style={{ fontSize: 8, color: "#6a6a82", fontFamily: '"JetBrains Mono", monospace', letterSpacing: "0.12em" }}>DRAWDOWN</span>
+        <span style={{ fontSize: 9, color: currentDd != null && currentDd < 0 ? ddColor : "#dcdce5", fontFamily: '"JetBrains Mono", monospace', fontWeight: 700 }}>
+          {currentDd != null ? `${currentDd.toFixed(2)}%` : "—"}
+        </span>
+      </div>
+      {data.length > 1 ? (
+        <ResponsiveContainer width="100%" height={28}>
+          <AreaChart data={data} margin={{ top: 2, right: 2, bottom: 2, left: 2 }}>
+            <defs>
+              <linearGradient id={`dd-grad-${data.length}`} x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#ff2d92" stopOpacity={0} />
+                <stop offset="100%" stopColor="#ff2d92" stopOpacity={0.5} />
+              </linearGradient>
+            </defs>
+            <YAxis hide domain={["dataMin", 0]} />
+            <Tooltip content={<ChartTooltip accentColor={color} />} cursor={false} />
+            <Area type="monotone" dataKey="drawdown_pct" stroke="#ff2d92" fill={`url(#dd-grad-${data.length})`} strokeWidth={1} isAnimationActive={false} />
+          </AreaChart>
+        </ResponsiveContainer>
+      ) : (
+        <div style={{ height: 28, display: "flex", alignItems: "center", fontSize: 8, color: "#6a6a82", fontFamily: '"JetBrains Mono", monospace' }}>—</div>
+      )}
+    </div>
+  );
+}
+
+// ─── Time range selector ─────────────────────────────────────────────────
+function RangePicker({ range, onChange }) {
+  const options = [
+    { value: "24h", label: "24H" },
+    { value: "7d",  label: "7D" },
+    { value: "30d", label: "30D" },
+    { value: "all", label: "ALL" },
+  ];
+  return (
+    <div style={{ display: "flex", gap: 0, border: "1px solid rgba(0,255,238,0.2)" }}>
+      {options.map(opt => {
+        const active = range === opt.value;
+        return (
+          <button
+            key={opt.value}
+            onClick={() => onChange(opt.value)}
+            style={{
+              padding: "6px 12px",
+              fontSize: 10,
+              fontFamily: '"JetBrains Mono", monospace',
+              fontWeight: 700,
+              letterSpacing: "0.1em",
+              background: active ? "rgba(0,255,238,0.15)" : "transparent",
+              color: active ? "#00ffee" : "#6a6a82",
+              border: "none",
+              borderRight: opt.value !== "all" ? "1px solid rgba(0,255,238,0.15)" : "none",
+              cursor: "pointer",
+              transition: "all 0.15s",
+            }}
+            onMouseEnter={e => { if (!active) e.currentTarget.style.color = "#dcdce5"; }}
+            onMouseLeave={e => { if (!active) e.currentTarget.style.color = "#6a6a82"; }}
+          >
+            {opt.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function AgentCard({ agent, onPause, onResume, onDelete, onInspect }) {
   const pnlColor = agent.pnl >= 0 ? "#00ff88" : "#ff2d92";
   const canToggle = agent.status !== "stopped";
@@ -258,6 +431,19 @@ function AgentCard({ agent, onPause, onResume, onDelete, onInspect }) {
         <Metric label="PNL" value={fmtUsd(agent.pnl)} sub={fmtPct(agent.pnl_pct)} color={pnlColor} />
         <Metric label="TRADES" value={agent.trades_executed} color="#00ffee" />
         <Metric label="CAPITAL" value={fmtUsd(agent.capital)} color="#dcdce5" />
+      </div>
+
+      {/* Wave 1 telemetry charts */}
+      <div style={{ marginBottom: 12 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
+          <span style={{ fontSize: 8, color: "#6a6a82", fontFamily: '"JetBrains Mono", monospace', letterSpacing: "0.12em" }}>EQUITY_CURVE</span>
+          <span style={{ fontSize: 8, color: "#6a6a82", fontFamily: '"JetBrains Mono", monospace' }}>{(agent.series || []).length} pts</span>
+        </div>
+        <EquitySparkline series={agent.series} color={agent.color} />
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
+        <ConfidenceMini series={agent.series} currentScore={agent.confidence_score} color={agent.color} />
+        <DrawdownMini series={agent.series} currentDd={agent.drawdown_pct} color={agent.color} />
       </div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 9, fontFamily: '"JetBrains Mono", monospace', color: "#6a6a82", letterSpacing: "0.05em" }}>
         <span style={{ display: "inline-flex", alignItems: "center", gap: 4, maxWidth: "70%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -534,6 +720,7 @@ export default function AgentForge({ apiUrl }) {
   const { address, isConnected, signer } = useWallet() || {};
   const [subscription, setSubscription] = useState({ tier: 0, expiry: 0, agentsUsed: 0, agentsAllowed: 1 });
   const [agents, setAgents] = useState([]);
+  const [range, setRange] = useState("all");        // Wave 1: chart time horizon — 24h | 7d | 30d | all
   const [createOpen, setCreateOpen] = useState(false);
   const [inspectAgent, setInspectAgent] = useState(null);
   const [isAllowlisted, setIsAllowlisted] = useState(false);
@@ -591,16 +778,26 @@ export default function AgentForge({ apiUrl }) {
   const fetchAgents = useCallback(async () => {
     if (!address || !apiUrl) { setAgents([]); return; }
     try {
-      const res = await fetch(
+      // Wave 1: hit the dashboard endpoint to get agents PLUS time-series in one round-trip.
+      // Falls back to /api/agents/list if dashboard is unavailable for any reason.
+      const dashUrl = `${apiUrl}/api/agents/dashboard/${address.toLowerCase()}?range=${encodeURIComponent(range)}&t=${Date.now()}`;
+      const res = await fetch(dashUrl, { cache: "no-store", headers: { "Cache-Control": "no-cache" } });
+      if (res.ok) {
+        const json = await res.json();
+        setAgents((json.agents || []).map(hydrateAgent));
+        return;
+      }
+      // Fallback to legacy list endpoint — no charts, but agents still render
+      const fallback = await fetch(
         `${apiUrl}/api/agents/list/${address.toLowerCase()}?t=${Date.now()}`,
         { cache: "no-store", headers: { "Cache-Control": "no-cache" } }
       );
-      const json = await res.json();
-      setAgents((json.agents || []).map(hydrateAgent));
+      const fjson = await fallback.json();
+      setAgents((fjson.agents || []).map(hydrateAgent));
     } catch (e) {
       console.error("Agent fetch failed:", e.message);
     }
-  }, [address, apiUrl]);
+  }, [address, apiUrl, range]);
 
   useEffect(() => { fetchSubscription(); }, [fetchSubscription]);
   useEffect(() => { checkAllowlist(); }, [checkAllowlist]);
@@ -736,9 +933,12 @@ export default function AgentForge({ apiUrl }) {
             {agents.length} total · {Math.max(0, subscription.agentsAllowed - agents.length)} slots remaining
           </div>
         </div>
-        <GlowButton onClick={() => setCreateOpen(true)} color="#00ffee" size="md" disabled={!isConnected || agents.length >= tierMeta.allowed}>
-          {!isConnected ? "CONNECT WALLET" : "+ DEPLOY AGENT"}
-        </GlowButton>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          {agents.length > 0 && <RangePicker range={range} onChange={setRange} />}
+          <GlowButton onClick={() => setCreateOpen(true)} color="#00ffee" size="md" disabled={!isConnected || agents.length >= tierMeta.allowed}>
+            {!isConnected ? "CONNECT WALLET" : "+ DEPLOY AGENT"}
+          </GlowButton>
+        </div>
       </div>
 
       {agents.length === 0 ? (
