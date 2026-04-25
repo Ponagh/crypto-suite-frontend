@@ -3,7 +3,9 @@ import { ethers } from "ethers";
 import { useWallet } from "./wallet-integration";
 import {
   LineChart, Line, AreaChart, Area, ResponsiveContainer,
-  Tooltip, ReferenceLine, YAxis,
+  Tooltip, ReferenceLine, YAxis, XAxis,
+  ScatterChart, Scatter, ZAxis,
+  PieChart, Pie, Cell,
 } from "recharts";
 
 /*
@@ -60,6 +62,8 @@ const hydrateAgent = (row) => {
     series: Array.isArray(row.series) ? row.series : [],
     confidence_score: row.confidence_score != null ? Number(row.confidence_score) : null,
     drawdown_pct: row.drawdown_pct != null ? Number(row.drawdown_pct) : null,
+    // Wave 2 — recent trades for scatter chart
+    trades: Array.isArray(row.trades) ? row.trades : [],
   };
 };
 
@@ -399,6 +403,289 @@ function RangePicker({ range, onChange }) {
   );
 }
 
+// ─── Wave 2: Portfolio allocation donut ────────────────────────────────────
+// Shows capital distribution across agents. Sits below HeroStats / above
+// SubscriptionCard. Uses agent.color for slice colors so each slice matches
+// the corresponding AgentCard. Only renders when there are 2+ active agents
+// (a single-agent donut is silly).
+
+function AllocationDonut({ agents }) {
+  // Filter agents with capital, sort by capital desc so the biggest slices
+  // come first in the legend (and at 12 o'clock in the donut)
+  const data = (agents || [])
+    .filter(a => a && (Number(a.capital) || 0) > 0)
+    .map(a => ({
+      id: a.id,
+      name: a.name,
+      strategy: a.strategy,
+      capital: Number(a.capital) || 0,
+      color: a.color || "#00ffee",
+      pnl: Number(a.pnl) || 0,
+      status: a.status,
+    }))
+    .sort((a, b) => b.capital - a.capital);
+
+  if (data.length < 2) return null;
+
+  const totalCapital = data.reduce((s, d) => s + d.capital, 0);
+  const totalPnl = data.reduce((s, d) => s + d.pnl, 0);
+  const totalPnlPct = totalCapital > 0 ? (totalPnl / totalCapital) * 100 : 0;
+  const pnlColor = totalPnl >= 0 ? "#00ff88" : "#ff2d92";
+
+  return (
+    <div style={{
+      position: "relative",
+      padding: "20px 32px",
+      marginBottom: 20,
+      background: "linear-gradient(135deg, rgba(0,15,25,0.85) 0%, rgba(8,5,20,0.85) 100%)",
+      border: "1px solid rgba(0,255,238,0.15)",
+      overflow: "hidden",
+    }}>
+      <ScanlineOverlay />
+      <div style={{ position: "relative", display: "flex", alignItems: "center", gap: 28, flexWrap: "wrap" }}>
+        {/* Donut + center label, both inside a relative wrapper so the label
+            is centered over the SVG regardless of outer flex layout */}
+        <div style={{ position: "relative", width: 180, height: 180, flexShrink: 0 }}>
+          <ResponsiveContainer width="100%" height="100%">
+            <PieChart>
+              <Pie
+                data={data}
+                dataKey="capital"
+                cx="50%"
+                cy="50%"
+                innerRadius={58}
+                outerRadius={84}
+                paddingAngle={2}
+                strokeWidth={0}
+                isAnimationActive={false}
+              >
+                {data.map((d) => <Cell key={d.id} fill={d.color} />)}
+              </Pie>
+              <Tooltip content={<DonutTooltip total={totalCapital} />} />
+            </PieChart>
+          </ResponsiveContainer>
+          {/* Center overlay — absolutely positioned inside the donut wrapper,
+              flex-centered so it stays put regardless of viewport */}
+          <div style={{
+            position: "absolute",
+            inset: 0,
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            pointerEvents: "none",
+            textAlign: "center",
+          }}>
+            <div style={{
+              fontSize: 8,
+              color: "#6a6a82",
+              fontFamily: '"JetBrains Mono", monospace',
+              letterSpacing: "0.15em",
+            }}>
+              TOTAL
+            </div>
+            <div style={{
+              fontSize: 16,
+              fontWeight: 700,
+              color: "#dcdce5",
+              fontFamily: '"JetBrains Mono", monospace',
+              marginTop: 1,
+            }}>
+              {fmtUsd(totalCapital)}
+            </div>
+            <div style={{
+              width: 32,
+              height: 1,
+              background: "rgba(0,255,238,0.2)",
+              margin: "5px 0",
+            }} />
+            <div style={{
+              fontSize: 8,
+              color: "#6a6a82",
+              fontFamily: '"JetBrains Mono", monospace',
+              letterSpacing: "0.15em",
+            }}>
+              NET_PNL
+            </div>
+            <div style={{
+              fontSize: 13,
+              fontWeight: 700,
+              color: pnlColor,
+              fontFamily: '"JetBrains Mono", monospace',
+              marginTop: 1,
+              textShadow: `0 0 8px ${pnlColor}40`,
+            }}>
+              {fmtUsd(totalPnl)}
+            </div>
+            <div style={{
+              fontSize: 9,
+              color: pnlColor,
+              fontFamily: '"JetBrains Mono", monospace',
+              opacity: 0.7,
+              marginTop: 1,
+            }}>
+              {fmtPct(totalPnlPct)}
+            </div>
+          </div>
+        </div>
+
+        {/* Legend / breakdown */}
+        <div style={{ flex: 1, minWidth: 260 }}>
+          <div style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "baseline",
+            marginBottom: 10,
+          }}>
+            <span style={{ fontSize: 10, color: "#6a6a82", fontFamily: '"JetBrains Mono", monospace', letterSpacing: "0.15em" }}>
+              CAPITAL_ALLOCATION
+            </span>
+            <span style={{ fontSize: 9, color: "#6a6a82", fontFamily: '"JetBrains Mono", monospace', letterSpacing: "0.1em" }}>
+              {data.length} ACTIVE_POSITIONS
+            </span>
+          </div>
+          <div style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
+            gap: "8px 18px",
+          }}>
+            {data.map((d) => {
+              const pct = totalCapital > 0 ? (d.capital / totalCapital) * 100 : 0;
+              const dPnlColor = d.pnl > 0 ? "#00ff88" : d.pnl < 0 ? "#ff2d92" : "#6a6a82";
+              return (
+                <div key={d.id} style={{
+                  display: "grid",
+                  gridTemplateColumns: "10px 1fr auto auto",
+                  alignItems: "center",
+                  gap: 8,
+                  fontSize: 11,
+                  fontFamily: '"JetBrains Mono", monospace',
+                }}>
+                  <span style={{
+                    width: 8,
+                    height: 8,
+                    background: d.color,
+                    boxShadow: `0 0 6px ${d.color}80`,
+                  }} />
+                  <span style={{
+                    color: "#dcdce5",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}>
+                    {d.name}
+                  </span>
+                  <span style={{ color: "#6a6a82", fontSize: 10 }}>
+                    {pct.toFixed(1)}%
+                  </span>
+                  <span style={{ color: dPnlColor, fontSize: 10, fontWeight: 600, minWidth: 60, textAlign: "right" }}>
+                    {fmtUsd(d.pnl)}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DonutTooltip({ active, payload, total }) {
+  if (!active || !payload?.[0]) return null;
+  const d = payload[0].payload;
+  const pct = total > 0 ? (d.capital / total) * 100 : 0;
+  return (
+    <div style={{
+      background: "rgba(5,5,12,0.95)",
+      border: `1px solid ${d.color}80`,
+      padding: "8px 12px",
+      fontSize: 11,
+      fontFamily: '"JetBrains Mono", monospace',
+      color: "#dcdce5",
+    }}>
+      <div style={{ color: d.color, fontWeight: 700, marginBottom: 4 }}>{d.name}</div>
+      <div style={{ color: "#6a6a82", fontSize: 9, marginBottom: 6, letterSpacing: "0.1em" }}>{d.strategy}</div>
+      <div>capital: {fmtUsd(d.capital)} <span style={{ color: "#6a6a82" }}>({pct.toFixed(1)}%)</span></div>
+      <div>pnl: <span style={{ color: d.pnl >= 0 ? "#00ff88" : "#ff2d92" }}>{fmtUsd(d.pnl)}</span></div>
+    </div>
+  );
+}
+
+// ─── Wave 2: Trade scatter ────────────────────────────────────────────────
+// Per-trade pnl_delta plotted over time. Each dot is one trade. Green for
+// profitable, magenta for losses. Sized by trade magnitude.
+
+function TradeScatter({ trades, color }) {
+  const data = (trades || [])
+    .filter(t => t && t.executed_at)
+    .map(t => ({
+      time: new Date(t.executed_at).getTime(),
+      pnl: Number(t.pnl_delta) || 0,
+      // Real schema uses `side` (buy/sell/accrue), not action_type
+      side: t.side || "trade",
+      mode: t.mode || "paper",
+      asset_in: t.asset_in,
+      asset_out: t.asset_out,
+      // Bubble size — scales with absolute pnl
+      size: Math.max(20, Math.min(120, Math.abs(Number(t.pnl_delta) || 0) * 4)),
+    }));
+
+  if (data.length < 1) return (
+    <div style={{
+      height: 60, display: "flex", alignItems: "center", justifyContent: "center",
+      border: "1px dashed rgba(0,255,238,0.15)",
+      fontSize: 9, fontFamily: '"JetBrains Mono", monospace',
+      color: "#6a6a82", letterSpacing: "0.1em",
+    }}>
+      [ NO_TRADES_YET ]
+    </div>
+  );
+
+  const greens = data.filter(d => d.pnl >= 0);
+  const reds   = data.filter(d => d.pnl < 0);
+
+  return (
+    <ResponsiveContainer width="100%" height={60}>
+      <ScatterChart margin={{ top: 4, right: 4, bottom: 4, left: 4 }}>
+        <XAxis type="number" dataKey="time" hide domain={["dataMin", "dataMax"]} />
+        <YAxis type="number" dataKey="pnl" hide domain={["dataMin - 1", "dataMax + 1"]} />
+        <ZAxis type="number" dataKey="size" range={[20, 120]} />
+        <ReferenceLine y={0} stroke="#6a6a82" strokeDasharray="2 2" strokeOpacity={0.5} />
+        <Tooltip content={<ScatterTooltip />} cursor={false} />
+        {greens.length > 0 && (
+          <Scatter data={greens} fill="#00ff88" fillOpacity={0.7} stroke="#00ff88" strokeWidth={1} />
+        )}
+        {reds.length > 0 && (
+          <Scatter data={reds} fill="#ff2d92" fillOpacity={0.7} stroke="#ff2d92" strokeWidth={1} />
+        )}
+      </ScatterChart>
+    </ResponsiveContainer>
+  );
+}
+
+function ScatterTooltip({ active, payload }) {
+  if (!active || !payload?.[0]) return null;
+  const d = payload[0].payload;
+  const time = new Date(d.time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const sideColor = d.side === "buy" ? "#00ff88" : d.side === "sell" ? "#ff9500" : "#00ffee";
+  const pair = d.asset_in && d.asset_out ? `${d.asset_in}→${d.asset_out}` : "";
+  return (
+    <div style={{
+      background: "rgba(5,5,12,0.95)",
+      border: `1px solid ${d.pnl >= 0 ? "#00ff88" : "#ff2d92"}80`,
+      padding: "6px 10px",
+      fontSize: 10,
+      fontFamily: '"JetBrains Mono", monospace',
+      color: "#dcdce5",
+    }}>
+      <div style={{ color: "#6a6a82", marginBottom: 2 }}>{time}</div>
+      <div><span style={{ color: sideColor, fontWeight: 700 }}>{d.side}</span>{pair && <span style={{ color: "#6a6a82" }}> {pair}</span>}</div>
+      <div>pnl: <span style={{ color: d.pnl >= 0 ? "#00ff88" : "#ff2d92" }}>{fmtUsd(d.pnl)}</span> <span style={{ color: "#6a6a82", fontSize: 9 }}>· {d.mode}</span></div>
+    </div>
+  );
+}
+
 function AgentCard({ agent, onPause, onResume, onDelete, onInspect }) {
   const pnlColor = agent.pnl >= 0 ? "#00ff88" : "#ff2d92";
   const canToggle = agent.status !== "stopped";
@@ -441,6 +728,16 @@ function AgentCard({ agent, onPause, onResume, onDelete, onInspect }) {
         </div>
         <EquitySparkline series={agent.series} color={agent.color} />
       </div>
+
+      {/* Wave 2: Trade scatter */}
+      <div style={{ marginBottom: 12 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
+          <span style={{ fontSize: 8, color: "#6a6a82", fontFamily: '"JetBrains Mono", monospace', letterSpacing: "0.12em" }}>TRADE_SCATTER</span>
+          <span style={{ fontSize: 8, color: "#6a6a82", fontFamily: '"JetBrains Mono", monospace' }}>{(agent.trades || []).length} trades</span>
+        </div>
+        <TradeScatter trades={agent.trades} color={agent.color} />
+      </div>
+
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
         <ConfidenceMini series={agent.series} currentScore={agent.confidence_score} color={agent.color} />
         <DrawdownMini series={agent.series} currentDd={agent.drawdown_pct} color={agent.color} />
@@ -924,6 +1221,7 @@ export default function AgentForge({ apiUrl }) {
       `}</style>
 
       <HeroStats subscription={subscription} agents={agents} />
+      <AllocationDonut agents={agents} />
       <SubscriptionCard subscription={subscription} isAllowlisted={isAllowlisted} onUpgrade={handleUpgrade} />
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 12 }}>
