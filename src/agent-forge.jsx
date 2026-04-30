@@ -1277,13 +1277,18 @@ function AgentCard({ agent, onPause, onResume, onDelete, onInspect, onEditPolicy
       </div>
       <div style={{ display: "flex", gap: 6, marginTop: 14, flexWrap: "wrap" }} onClick={e => e.stopPropagation()}>
         {agent.status === "halted" ? (
+          // Halted agents (whether reached via manual halt or auto-halt) always
+          // need an UNHALT path back to running. Shown regardless of mode.
           <GlowButton onClick={() => onUnhalt(agent.id)} color="#ff2d92" variant="ghost" size="sm" style={{ flex: 1 }}>UNHALT</GlowButton>
         ) : canToggle && (
           agent.status === "running"
             ? <GlowButton onClick={() => onPause(agent.id)} color="#ff9500" variant="ghost" size="sm" style={{ flex: 1 }}>PAUSE</GlowButton>
             : <GlowButton onClick={() => onResume(agent.id)} color="#00ff88" variant="ghost" size="sm" style={{ flex: 1 }}>RESUME</GlowButton>
         )}
-        {agent.status !== "halted" && (
+        {/* HALT only meaningful in LIVE mode — in paper mode PAUSE is functionally
+            identical and avoids cluttering the action row. Auto-halt from policy
+            violations still works in paper; this just hides the manual button. */}
+        {agent.status !== "halted" && agent.mode === "live" && (
           <GlowButton onClick={() => onHalt(agent.id)} color="#ff2d92" variant="ghost" size="sm" style={{ flex: 1 }}>HALT</GlowButton>
         )}
         <GlowButton onClick={() => onEditPolicy && onEditPolicy(agent, "risk")} color="#a855f7" variant="ghost" size="sm" style={{ flex: 1 }}>POLICY</GlowButton>
