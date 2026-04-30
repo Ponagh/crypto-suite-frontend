@@ -686,7 +686,523 @@ function ScatterTooltip({ active, payload }) {
   );
 }
 
-function AgentCard({ agent, onPause, onResume, onDelete, onInspect }) {
+// ─── S3: Policy violations badge ──────────────────────────────────────────
+// Polls /api/agents/:id/violations every 60s. Shows count in last 24h.
+// Hidden when zero. Click → opens the policy modal scrolled to History tab.
+
+function ViolationsBadge({ agentId, apiUrl, onClick }) {
+  const [count, setCount] = useState(0);
+
+  const refresh = useCallback(async () => {
+    if (!agentId || !apiUrl) return;
+    try {
+      const res = await fetch(`${apiUrl}/api/agents/${agentId}/violations?limit=200`);
+      if (!res.ok) return;
+      const data = await res.json();
+      const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+      const recent = (data.violations || []).filter(v =>
+        v?.recorded_at && new Date(v.recorded_at).getTime() > cutoff
+      );
+      setCount(recent.length);
+    } catch (err) {
+      // Silent — badge just stays at last known value
+    }
+  }, [agentId, apiUrl]);
+
+  useEffect(() => {
+    refresh();
+    const handle = setInterval(refresh, 60_000);
+    return () => clearInterval(handle);
+  }, [refresh]);
+
+  if (count <= 0) return null;
+
+  return (
+    <button
+      onClick={(e) => { e.stopPropagation(); onClick && onClick(); }}
+      title={`${count} policy violation${count === 1 ? '' : 's'} in last 24h — click to view`}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 4,
+        padding: "2px 8px",
+        background: "rgba(255,45,146,0.15)",
+        border: "1px solid #ff2d92",
+        color: "#ff2d92",
+        fontSize: 9,
+        fontFamily: '"JetBrains Mono", monospace',
+        fontWeight: 700,
+        letterSpacing: "0.1em",
+        cursor: "pointer",
+        textShadow: "0 0 6px rgba(255,45,146,0.6)",
+      }}
+    >
+      <span>⚠</span>
+      <span>{count} VIOLATION{count === 1 ? '' : 'S'}</span>
+    </button>
+  );
+}
+
+// ─── S3: Edit Policy modal ────────────────────────────────────────────────
+// Three tabs: Authorization (read-only CDP info) / Risk dials (editable) /
+// History (prior versions). PUT to /api/agents/:id/policy creates v(N+1).
+
+function EditPolicyModal({ open, agent, apiUrl, ownerWallet, initialTab = "risk", onClose, onSaved }) {
+  const [tab, setTab] = useState(initialTab);
+  const [policy, setPolicy] = useState(null);
+  const [history, setHistory] = useState([]);
+  const [violations, setViolations] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+  const [edits, setEdits] = useState({});
+
+  // Reset tab when modal reopens
+  useEffect(() => {
+    if (open) setTab(initialTab);
+  }, [open, initialTab]);
+
+  // Load active policy + history + violations on open
+  useEffect(() => {
+    if (!open || !agent || !apiUrl) return;
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    (async () => {
+      try {
+        const [pRes, hRes, vRes] = await Promise.all([
+          fetch(`${apiUrl}/api/agents/${agent.id}/policy`),
+          fetch(`${apiUrl}/api/agents/${agent.id}/policy/history`),
+          fetch(`${apiUrl}/api/agents/${agent.id}/violations?limit=50`),
+        ]);
+        const pData = pRes.ok ? await pRes.json() : { policy: null };
+        const hData = hRes.ok ? await hRes.json() : { versions: [] };
+        const vData = vRes.ok ? await vRes.json() : { violations: [] };
+        if (cancelled) return;
+        setPolicy(pData.policy);
+        setHistory(hData.versions || []);
+        setViolations(vData.violations || []);
+        setEdits({}); // reset edits on reload
+      } catch (err) {
+        if (!cancelled) setError(err?.message || String(err));
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [open, agent, apiUrl]);
+
+  const fieldVal = (key) => {
+    if (key in edits) return edits[key];
+    if (!policy) return "";
+    const v = policy[key];
+    return v == null ? "" : v;
+  };
+
+  const setEdit = (key, value) => {
+    setEdits(prev => ({ ...prev, [key]: value }));
+  };
+
+  const hasEdits = Object.keys(edits).length > 0;
+
+  const handleSave = async () => {
+    if (!hasEdits) return;
+    setSaving(true);
+    setError(null);
+    try {
+      // Coerce numeric fields
+      const numericKeys = [
+        "max_trade_size_usd", "max_daily_volume_usd", "max_gas_gwei",
+        "slippage_tolerance_bps", "daily_loss_cap_pct", "lifetime_loss_cap_pct",
+        "profit_lock_threshold_pct", "profit_lock_skim_pct",
+        "drawdown_trailing_stop_pct", "min_confidence_score",
+        "max_eth_value_per_tx",
+      ];
+      const body = {};
+      for (const [k, v] of Object.entries(edits)) {
+        if (v === "" || v == null) {
+          body[k] = null;
+        } else if (numericKeys.includes(k)) {
+          const n = Number(v);
+          body[k] = Number.isFinite(n) ? n : null;
+        } else {
+          body[k] = v;
+        }
+      }
+      const res = await fetch(`${apiUrl}/api/agents/${agent.id}/policy`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Wallet-Address": ownerWallet,
+        },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(`PUT /policy → ${res.status}: ${t}`);
+      }
+      const data = await res.json();
+      setPolicy(data.policy);
+      setEdits({});
+      // Reload history so the new version appears
+      const hRes = await fetch(`${apiUrl}/api/agents/${agent.id}/policy/history`);
+      if (hRes.ok) {
+        const hData = await hRes.json();
+        setHistory(hData.versions || []);
+      }
+      if (onSaved) onSaved(data.policy);
+    } catch (err) {
+      setError(err?.message || String(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!open || !agent) return null;
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed", inset: 0, zIndex: 1000,
+        background: "rgba(0,0,0,0.85)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        padding: 20,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: "100%",
+          maxWidth: 720,
+          maxHeight: "90vh",
+          overflow: "hidden",
+          display: "flex",
+          flexDirection: "column",
+          background: "linear-gradient(135deg, rgba(10,10,18,0.98) 0%, rgba(5,5,12,0.98) 100%)",
+          border: `1px solid ${agent.color}80`,
+          boxShadow: `0 0 40px ${agent.color}40`,
+          position: "relative",
+        }}
+      >
+        <ScanlineOverlay />
+        <CornerBrackets color={agent.color} />
+
+        {/* Header */}
+        <div style={{ padding: "18px 24px", borderBottom: "1px solid #1a1a2e", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <div style={{ fontSize: 9, color: "#6a6a82", fontFamily: '"JetBrains Mono", monospace', letterSpacing: "0.15em" }}>EDIT_POLICY</div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: agent.color, fontFamily: '"JetBrains Mono", monospace', letterSpacing: "0.05em", marginTop: 2 }}>
+              {agent.name}
+              {policy && <span style={{ color: "#6a6a82", fontWeight: 400, marginLeft: 10, fontSize: 11 }}>· v{policy.version}</span>}
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            style={{
+              background: "transparent", border: "1px solid #6a6a82", color: "#6a6a82",
+              fontSize: 18, padding: "2px 10px", cursor: "pointer",
+              fontFamily: '"JetBrains Mono", monospace',
+            }}
+          >×</button>
+        </div>
+
+        {/* Tab bar */}
+        <div style={{ display: "flex", borderBottom: "1px solid #1a1a2e" }}>
+          {[
+            { id: "auth", label: "AUTHORIZATION" },
+            { id: "risk", label: "RISK_DIALS" },
+            { id: "history", label: "HISTORY" },
+          ].map(t => (
+            <button
+              key={t.id}
+              onClick={() => setTab(t.id)}
+              style={{
+                flex: 1,
+                padding: "12px 16px",
+                background: tab === t.id ? `${agent.color}15` : "transparent",
+                border: "none",
+                borderBottom: `2px solid ${tab === t.id ? agent.color : "transparent"}`,
+                color: tab === t.id ? agent.color : "#6a6a82",
+                fontSize: 10,
+                fontWeight: 700,
+                fontFamily: '"JetBrains Mono", monospace',
+                letterSpacing: "0.15em",
+                cursor: "pointer",
+              }}
+            >{t.label}</button>
+          ))}
+        </div>
+
+        {/* Body */}
+        <div style={{ flex: 1, overflow: "auto", padding: "20px 24px", position: "relative" }}>
+          {loading && (
+            <div style={{ color: "#6a6a82", fontFamily: '"JetBrains Mono", monospace', fontSize: 11, letterSpacing: "0.1em" }}>
+              [ LOADING_POLICY... ]
+            </div>
+          )}
+
+          {error && (
+            <div style={{ padding: 12, marginBottom: 16, border: "1px solid #ff2d92", background: "rgba(255,45,146,0.1)", color: "#ff2d92", fontSize: 11, fontFamily: '"JetBrains Mono", monospace' }}>
+              ERROR: {error}
+            </div>
+          )}
+
+          {!loading && policy && tab === "auth" && (
+            <PolicyTabAuth policy={policy} agent={agent} />
+          )}
+
+          {!loading && policy && tab === "risk" && (
+            <PolicyTabRisk
+              policy={policy}
+              fieldVal={fieldVal}
+              setEdit={setEdit}
+              edits={edits}
+              accentColor={agent.color}
+            />
+          )}
+
+          {!loading && tab === "history" && (
+            <PolicyTabHistory history={history} violations={violations} accentColor={agent.color} />
+          )}
+        </div>
+
+        {/* Footer */}
+        <div style={{ padding: "14px 24px", borderTop: "1px solid #1a1a2e", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <span style={{ fontSize: 9, color: "#6a6a82", fontFamily: '"JetBrains Mono", monospace', letterSpacing: "0.1em" }}>
+            {hasEdits ? `${Object.keys(edits).length} UNSAVED CHANGE${Object.keys(edits).length === 1 ? '' : 'S'}` : "NO_PENDING_CHANGES"}
+          </span>
+          <div style={{ display: "flex", gap: 8 }}>
+            <GlowButton onClick={onClose} color="#6a6a82" variant="ghost" size="sm">CANCEL</GlowButton>
+            {tab === "risk" && (
+              <GlowButton
+                onClick={handleSave}
+                color={agent.color}
+                variant="solid"
+                size="sm"
+                disabled={!hasEdits || saving}
+              >
+                {saving ? "SAVING..." : `SAVE → v${(policy?.version || 0) + 1}`}
+              </GlowButton>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Authorization tab — read-only CDP info ──────────────────────────────
+function PolicyTabAuth({ policy, agent }) {
+  const protocols = Array.isArray(policy.allowed_protocols) ? policy.allowed_protocols : [];
+  return (
+    <div style={{ fontFamily: '"JetBrains Mono", monospace' }}>
+      <div style={{ fontSize: 9, color: "#6a6a82", letterSpacing: "0.15em", marginBottom: 8 }}>CDP_LAYER</div>
+      <div style={{ padding: 14, border: "1px solid #1a1a2e", marginBottom: 16, background: "rgba(0,0,0,0.3)" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "8px 16px", fontSize: 11 }}>
+          <span style={{ color: "#6a6a82" }}>cdp_account:</span>
+          <span style={{ color: "#dcdce5", wordBreak: "break-all" }}>
+            {policy.cdp_account_address || <em style={{ color: "#6a6a82" }}>not yet provisioned (lazy on first LIVE trade)</em>}
+          </span>
+          <span style={{ color: "#6a6a82" }}>cdp_policy_id:</span>
+          <span style={{ color: "#dcdce5", wordBreak: "break-all" }}>
+            {policy.cdp_policy_id || <em style={{ color: "#6a6a82" }}>not yet provisioned</em>}
+          </span>
+          <span style={{ color: "#6a6a82" }}>max_eth_value:</span>
+          <span style={{ color: "#dcdce5" }}>{policy.max_eth_value_per_tx || 0} ETH per tx</span>
+        </div>
+      </div>
+
+      <div style={{ fontSize: 9, color: "#6a6a82", letterSpacing: "0.15em", marginBottom: 8 }}>ALLOWED_PROTOCOLS</div>
+      <div style={{ padding: 14, border: "1px solid #1a1a2e", background: "rgba(0,0,0,0.3)" }}>
+        {protocols.length === 0 ? (
+          <div style={{ fontSize: 11, color: "#6a6a82" }}>
+            <em>No protocols allowlisted. This agent cannot make LIVE trades until protocols are added.</em>
+            <div style={{ marginTop: 8, fontSize: 10 }}>
+              Protocols are added when the agent's strategy connects to a router (S4 Aerodrome, S5 Uniswap, S6 Aggregator).
+            </div>
+          </div>
+        ) : (
+          <ul style={{ margin: 0, padding: 0, listStyle: "none" }}>
+            {protocols.map((p, i) => (
+              <li key={i} style={{ fontSize: 11, color: "#dcdce5", wordBreak: "break-all", padding: "4px 0", borderBottom: i < protocols.length - 1 ? "1px solid #0f0f1a" : "none" }}>
+                {p}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      <div style={{ marginTop: 16, fontSize: 10, color: "#6a6a82", lineHeight: 1.6 }}>
+        Authorization is enforced at sign-time inside Coinbase's Nitro Enclave.
+        Even a buggy strategy cannot exceed these limits — they are checked before
+        any signature is produced. The risk dials in the next tab add a second
+        layer of protection that runs in our backend before signing.
+      </div>
+    </div>
+  );
+}
+
+// ─── Risk dials tab — editable form ──────────────────────────────────────
+function PolicyTabRisk({ policy, fieldVal, setEdit, edits, accentColor }) {
+  const fields = [
+    {
+      group: "Trade limits",
+      items: [
+        { key: "max_trade_size_usd", label: "Max trade size (USD)", suffix: "USD", type: "number", step: 1, min: 0 },
+        { key: "max_daily_volume_usd", label: "Max daily volume (USD)", suffix: "USD", type: "number", step: 10, min: 0 },
+        { key: "max_gas_gwei", label: "Max gas price", suffix: "gwei", type: "number", step: 1, min: 1 },
+        { key: "slippage_tolerance_bps", label: "Slippage tolerance", suffix: "bps", type: "number", step: 5, min: 0, hint: "Live trades only — paper engines don't model slippage" },
+      ],
+    },
+    {
+      group: "Loss limits (negative = loss)",
+      items: [
+        { key: "daily_loss_cap_pct", label: "Daily loss cap", suffix: "%", type: "number", step: 0.5 },
+        { key: "lifetime_loss_cap_pct", label: "Lifetime loss cap", suffix: "%", type: "number", step: 0.5 },
+        { key: "drawdown_trailing_stop_pct", label: "Drawdown trailing stop", suffix: "% from peak", type: "number", step: 0.5, min: 0, allowEmpty: true, hint: "Empty = no trailing stop" },
+      ],
+    },
+    {
+      group: "Profit lock (virtual / bookkeeping in S3)",
+      items: [
+        { key: "profit_lock_threshold_pct", label: "Profit lock threshold", suffix: "% pnl", type: "number", step: 1, min: 0, allowEmpty: true, hint: "Empty = no profit lock for this strategy" },
+        { key: "profit_lock_skim_pct", label: "Skim percentage when locked", suffix: "% of profit", type: "number", step: 5, min: 0, max: 100 },
+      ],
+    },
+    {
+      group: "Other",
+      items: [
+        { key: "min_confidence_score", label: "Min confidence score", suffix: "/ 100", type: "number", step: 5, min: 0, max: 100, hint: "Below this, agent logs a warning (does not halt)" },
+        { key: "notes", label: "Notes (free-form)", type: "text" },
+      ],
+    },
+  ];
+
+  return (
+    <div style={{ fontFamily: '"JetBrains Mono", monospace' }}>
+      {fields.map((group, gi) => (
+        <div key={gi} style={{ marginBottom: 18 }}>
+          <div style={{ fontSize: 9, color: "#6a6a82", letterSpacing: "0.15em", marginBottom: 8, textTransform: "uppercase" }}>{group.group}</div>
+          <div style={{ padding: 14, border: "1px solid #1a1a2e", background: "rgba(0,0,0,0.3)" }}>
+            {group.items.map((field, fi) => {
+              const isEdited = field.key in edits;
+              return (
+                <div key={field.key} style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 8, alignItems: "center", padding: "8px 0", borderBottom: fi < group.items.length - 1 ? "1px solid #0f0f1a" : "none" }}>
+                  <div>
+                    <label style={{ fontSize: 11, color: "#dcdce5", display: "block" }}>
+                      {field.label}
+                      {isEdited && <span style={{ color: accentColor, marginLeft: 6, fontSize: 9 }}>● edited</span>}
+                    </label>
+                    {field.hint && (
+                      <div style={{ fontSize: 9, color: "#6a6a82", marginTop: 2 }}>{field.hint}</div>
+                    )}
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <input
+                      type={field.type}
+                      step={field.step}
+                      min={field.min}
+                      max={field.max}
+                      value={fieldVal(field.key)}
+                      onChange={(e) => setEdit(field.key, e.target.value)}
+                      style={{
+                        width: field.type === "text" ? 220 : 100,
+                        padding: "6px 8px",
+                        background: "rgba(0,0,0,0.5)",
+                        border: `1px solid ${isEdited ? accentColor : "#1a1a2e"}`,
+                        color: "#dcdce5",
+                        fontFamily: '"JetBrains Mono", monospace',
+                        fontSize: 11,
+                        textAlign: field.type === "number" ? "right" : "left",
+                        outline: "none",
+                      }}
+                    />
+                    {field.suffix && (
+                      <span style={{ fontSize: 9, color: "#6a6a82", minWidth: 60 }}>{field.suffix}</span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ─── History tab — version list + recent violations ───────────────────────
+function PolicyTabHistory({ history, violations, accentColor }) {
+  return (
+    <div style={{ fontFamily: '"JetBrains Mono", monospace' }}>
+      <div style={{ fontSize: 9, color: "#6a6a82", letterSpacing: "0.15em", marginBottom: 8 }}>VERSIONS ({history.length})</div>
+      <div style={{ marginBottom: 20 }}>
+        {history.length === 0 ? (
+          <div style={{ padding: 14, border: "1px solid #1a1a2e", color: "#6a6a82", fontSize: 11, fontStyle: "italic" }}>
+            No policy versions found.
+          </div>
+        ) : (
+          history.map((v, i) => (
+            <div key={v.id} style={{ padding: 12, marginBottom: 8, border: `1px solid ${v.is_active ? accentColor : "#1a1a2e"}`, background: "rgba(0,0,0,0.3)" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 }}>
+                <span style={{ fontSize: 12, fontWeight: 700, color: v.is_active ? accentColor : "#dcdce5" }}>
+                  v{v.version}
+                  {v.is_active && <span style={{ marginLeft: 8, fontSize: 9, padding: "1px 6px", background: accentColor, color: "#000", letterSpacing: "0.1em" }}>ACTIVE</span>}
+                </span>
+                <span style={{ fontSize: 9, color: "#6a6a82" }}>
+                  {new Date(v.created_at).toLocaleString()}
+                </span>
+              </div>
+              <div style={{ fontSize: 10, color: "#6a6a82", marginBottom: 6 }}>
+                by <span style={{ color: "#dcdce5" }}>{v.created_by?.slice(0, 10)}…{v.created_by?.slice(-6)}</span>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: "4px 12px", fontSize: 10 }}>
+                <span style={{ color: "#6a6a82" }}>max_trade: <span style={{ color: "#dcdce5" }}>${v.max_trade_size_usd}</span></span>
+                <span style={{ color: "#6a6a82" }}>daily_cap: <span style={{ color: "#dcdce5" }}>{v.daily_loss_cap_pct}%</span></span>
+                <span style={{ color: "#6a6a82" }}>lifetime_cap: <span style={{ color: "#dcdce5" }}>{v.lifetime_loss_cap_pct}%</span></span>
+                <span style={{ color: "#6a6a82" }}>min_conf: <span style={{ color: "#dcdce5" }}>{v.min_confidence_score}</span></span>
+              </div>
+              {v.notes && (
+                <div style={{ fontSize: 9, color: "#6a6a82", marginTop: 6, fontStyle: "italic" }}>"{v.notes}"</div>
+              )}
+            </div>
+          ))
+        )}
+      </div>
+
+      <div style={{ fontSize: 9, color: "#6a6a82", letterSpacing: "0.15em", marginBottom: 8 }}>RECENT_VIOLATIONS ({violations.length})</div>
+      {violations.length === 0 ? (
+        <div style={{ padding: 14, border: "1px solid #1a1a2e", color: "#6a6a82", fontSize: 11, fontStyle: "italic" }}>
+          No violations recorded.
+        </div>
+      ) : (
+        <div style={{ maxHeight: 240, overflow: "auto" }}>
+          {violations.map((v) => (
+            <div key={v.id} style={{ padding: 8, marginBottom: 4, border: `1px solid ${v.resulted_in_halt ? "#ff2d92" : "#1a1a2e"}`, background: "rgba(0,0,0,0.3)", fontSize: 10 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 2 }}>
+                <span style={{ color: v.resulted_in_halt ? "#ff2d92" : "#ff9500", fontWeight: 700 }}>
+                  {v.violation_type}
+                  {v.resulted_in_halt && <span style={{ marginLeft: 6, fontSize: 8 }}>· HALT</span>}
+                </span>
+                <span style={{ color: "#6a6a82", fontSize: 9 }}>{new Date(v.recorded_at).toLocaleTimeString()}</span>
+              </div>
+              <div style={{ color: "#6a6a82", fontSize: 9 }}>
+                attempted: <span style={{ color: "#dcdce5" }}>{v.attempted_value ?? "—"}</span>
+                {" · "}
+                policy: <span style={{ color: "#dcdce5" }}>{v.policy_value ?? "—"}</span>
+                {" · "}
+                layer: <span style={{ color: "#dcdce5" }}>{v.layer}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AgentCard({ agent, onPause, onResume, onDelete, onInspect, onEditPolicy, onHalt, onUnhalt, apiUrl }) {
   const pnlColor = agent.pnl >= 0 ? "#00ff88" : "#ff2d92";
   const canToggle = agent.status !== "stopped";
   const deployedAgo = Math.floor((Date.now() - agent.deployedAtMs) / 60000);
@@ -708,8 +1224,19 @@ function AgentCard({ agent, onPause, onResume, onDelete, onInspect }) {
           </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <ViolationsBadge agentId={agent.id} apiUrl={apiUrl} onClick={() => onEditPolicy && onEditPolicy(agent, "history")} />
           <StatusDot status={agent.status} />
-          <span style={{ fontSize: 9, letterSpacing: "0.12em", color: agent.status === "running" ? "#00ff88" : agent.status === "paused" ? "#ff9500" : "#ff2d92", fontFamily: '"JetBrains Mono", monospace', fontWeight: 600 }}>
+          <span style={{
+            fontSize: 9,
+            letterSpacing: "0.12em",
+            color: agent.status === "running" ? "#00ff88"
+                 : agent.status === "paused" ? "#ff9500"
+                 : agent.status === "halted" ? "#ff2d92"
+                 : "#ff2d92",
+            fontFamily: '"JetBrains Mono", monospace',
+            fontWeight: 600,
+            textShadow: agent.status === "halted" ? "0 0 6px rgba(255,45,146,0.7)" : "none",
+          }}>
             {agent.status.toUpperCase()}
           </span>
         </div>
@@ -748,12 +1275,15 @@ function AgentCard({ agent, onPause, onResume, onDelete, onInspect }) {
         </span>
         <span>{deployedAgo < 1 ? "just now" : `${deployedAgo}m ago`}</span>
       </div>
-      <div style={{ display: "flex", gap: 6, marginTop: 14 }} onClick={e => e.stopPropagation()}>
-        {canToggle && (
+      <div style={{ display: "flex", gap: 6, marginTop: 14, flexWrap: "wrap" }} onClick={e => e.stopPropagation()}>
+        {agent.status === "halted" ? (
+          <GlowButton onClick={() => onUnhalt(agent.id)} color="#ff2d92" variant="ghost" size="sm" style={{ flex: 1 }}>UNHALT</GlowButton>
+        ) : canToggle && (
           agent.status === "running"
             ? <GlowButton onClick={() => onPause(agent.id)} color="#ff9500" variant="ghost" size="sm" style={{ flex: 1 }}>PAUSE</GlowButton>
             : <GlowButton onClick={() => onResume(agent.id)} color="#00ff88" variant="ghost" size="sm" style={{ flex: 1 }}>RESUME</GlowButton>
         )}
+        <GlowButton onClick={() => onEditPolicy && onEditPolicy(agent, "risk")} color="#a855f7" variant="ghost" size="sm" style={{ flex: 1 }}>POLICY</GlowButton>
         <GlowButton onClick={() => onInspect(agent)} color="#00ffee" variant="ghost" size="sm" style={{ flex: 1 }}>INSPECT</GlowButton>
         <GlowButton onClick={() => onDelete(agent.id)} color="#ff2d92" variant="ghost" size="sm" style={{ flex: 1 }}>TERMINATE</GlowButton>
       </div>
@@ -1020,6 +1550,8 @@ export default function AgentForge({ apiUrl }) {
   const [range, setRange] = useState("all");        // Wave 1: chart time horizon — 24h | 7d | 30d | all
   const [createOpen, setCreateOpen] = useState(false);
   const [inspectAgent, setInspectAgent] = useState(null);
+  const [policyAgent, setPolicyAgent] = useState(null);          // S3: which agent's policy is being edited
+  const [policyInitialTab, setPolicyInitialTab] = useState("risk");
   const [isAllowlisted, setIsAllowlisted] = useState(false);
   const [riskOpen, setRiskOpen] = useState(false);
   const [pendingDeploy, setPendingDeploy] = useState(null);
@@ -1203,6 +1735,45 @@ export default function AgentForge({ apiUrl }) {
 
   const handlePause = async (id) => { await fetch(`${apiUrl}/api/agents/${id}/pause`, { method: "POST" }); fetchAgents(); };
   const handleResume = async (id) => { await fetch(`${apiUrl}/api/agents/${id}/resume`, { method: "POST" }); fetchAgents(); };
+
+  // S3: halt/unhalt + edit policy
+  const handleHalt = async (id) => {
+    if (!address) return;
+    try {
+      await fetch(`${apiUrl}/api/agents/${id}/halt`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Wallet-Address": address.toLowerCase(),
+        },
+        body: JSON.stringify({ reason: "Manual halt from UI" }),
+      });
+      fetchAgents();
+    } catch (err) {
+      console.error("[AgentForge] handleHalt failed:", err);
+    }
+  };
+
+  const handleUnhalt = async (id) => {
+    if (!address) return;
+    try {
+      await fetch(`${apiUrl}/api/agents/${id}/unhalt`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Wallet-Address": address.toLowerCase(),
+        },
+      });
+      fetchAgents();
+    } catch (err) {
+      console.error("[AgentForge] handleUnhalt failed:", err);
+    }
+  };
+
+  const handleEditPolicy = (agent, initialTab = "risk") => {
+    setPolicyInitialTab(initialTab);
+    setPolicyAgent(agent);
+  };
   const handleDelete = async (id) => {
     if (!window.confirm("Terminate this agent? All state will be lost.")) return;
     await fetch(`${apiUrl}/api/agents/${id}`, { method: "DELETE" });
@@ -1252,7 +1823,18 @@ export default function AgentForge({ apiUrl }) {
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(360px, 1fr))", gap: 12 }}>
           {agents.map(agent => (
-            <AgentCard key={agent.id} agent={agent} onPause={handlePause} onResume={handleResume} onDelete={handleDelete} onInspect={setInspectAgent} />
+            <AgentCard
+              key={agent.id}
+              agent={agent}
+              onPause={handlePause}
+              onResume={handleResume}
+              onDelete={handleDelete}
+              onInspect={setInspectAgent}
+              onEditPolicy={handleEditPolicy}
+              onHalt={handleHalt}
+              onUnhalt={handleUnhalt}
+              apiUrl={apiUrl}
+            />
           ))}
         </div>
       )}
@@ -1260,6 +1842,15 @@ export default function AgentForge({ apiUrl }) {
       <CreateAgentModal open={createOpen} onClose={() => setCreateOpen(false)} onDeploy={handleStartDeploy} currentSlots={agents.length} maxSlots={tierMeta.allowed} isAllowlisted={isAllowlisted} deploying={deploying} />
       <RiskAgreementModal open={riskOpen} template={pendingDeploy?.template} capital={Number(pendingDeploy?.config?.capital) || 500} mode={pendingDeploy?.mode} onSign={handleSignAgreement} onCancel={() => { setRiskOpen(false); setPendingDeploy(null); }} signing={signing} />
       <AgentDetailDrawer agent={inspectAgent} open={!!inspectAgent} onClose={() => setInspectAgent(null)} apiUrl={apiUrl} />
+      <EditPolicyModal
+        open={!!policyAgent}
+        agent={policyAgent}
+        apiUrl={apiUrl}
+        ownerWallet={address ? address.toLowerCase() : ""}
+        initialTab={policyInitialTab}
+        onClose={() => setPolicyAgent(null)}
+        onSaved={() => { /* keep modal open, just refreshed internally */ }}
+      />
     </div>
   );
 }
