@@ -1283,6 +1283,9 @@ function AgentCard({ agent, onPause, onResume, onDelete, onInspect, onEditPolicy
             ? <GlowButton onClick={() => onPause(agent.id)} color="#ff9500" variant="ghost" size="sm" style={{ flex: 1 }}>PAUSE</GlowButton>
             : <GlowButton onClick={() => onResume(agent.id)} color="#00ff88" variant="ghost" size="sm" style={{ flex: 1 }}>RESUME</GlowButton>
         )}
+        {agent.status !== "halted" && (
+          <GlowButton onClick={() => onHalt(agent.id)} color="#ff2d92" variant="ghost" size="sm" style={{ flex: 1 }}>HALT</GlowButton>
+        )}
         <GlowButton onClick={() => onEditPolicy && onEditPolicy(agent, "risk")} color="#a855f7" variant="ghost" size="sm" style={{ flex: 1 }}>POLICY</GlowButton>
         <GlowButton onClick={() => onInspect(agent)} color="#00ffee" variant="ghost" size="sm" style={{ flex: 1 }}>INSPECT</GlowButton>
         <GlowButton onClick={() => onDelete(agent.id)} color="#ff2d92" variant="ghost" size="sm" style={{ flex: 1 }}>TERMINATE</GlowButton>
@@ -1739,6 +1742,14 @@ export default function AgentForge({ apiUrl }) {
   // S3: halt/unhalt + edit policy
   const handleHalt = async (id) => {
     if (!address) return;
+    const agent = agents.find(a => a.id === id);
+    const name = agent?.name || id;
+    const ok = window.confirm(
+      `Halt ${name}?\n\n` +
+      `This stops the agent immediately. Strategy ticks resume only when ` +
+      `you click UNHALT. Existing trade history is preserved.`
+    );
+    if (!ok) return;
     try {
       await fetch(`${apiUrl}/api/agents/${id}/halt`, {
         method: "POST",
