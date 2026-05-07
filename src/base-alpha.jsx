@@ -1,312 +1,435 @@
-import { useState, useEffect, useRef } from "react";
+/**
+ * BaseAlpha — Smart Money Intelligence
+ * Phase 4: connected to real backend, mobile-responsive
+ *
+ * Fetches from:
+ *   GET /api/alpha/alerts?tier=free|pro   → alpha_alerts table
+ *   GET /api/alpha/trending               → alpha_trending table
+ *   GET /api/alpha/subscription/:address  → on-chain subscription check
+ *
+ * When alpha_alerts is empty (wallet-poller disabled), shows a clear
+ * "no alerts yet" state with explanation. When data exists, renders
+ * the real feed with tier-gated limits.
+ */
 
-const MOCK_WALLETS = [
-  { label: "Paradigm", address: "0x1a2...f8e", type: "VC" },
-  { label: "a16Labs", address: "0x3b4...d2c", type: "Fund" },
-  { label: "Whale_0x7f", address: "0x7f8...a1b", type: "Whale" },
-  { label: "DeFi_Chad", address: "0x9c2...e4f", type: "Degen" },
-  { label: "Coinbase_Ventures", address: "0x5d1...b3a", type: "VC" },
-  { label: "Morpho_Treasury", address: "0x2e7...c8d", type: "Protocol" },
-  { label: "Base_OG_42", address: "0x8a3...f7e", type: "Whale" },
-  { label: "Aero_Maxi", address: "0x4f9...d1c", type: "Degen" },
-];
+import { useState, useEffect, useCallback } from "react";
+import { useWallet } from "./wallet-integration";
 
-const TOKENS = [
-  { name: "AERO", price: 2.84, change: 12.4 },
-  { name: "MORPHO", price: 4.12, change: 8.7 },
-  { name: "BRETT", price: 0.18, change: -3.2 },
-  { name: "DEGEN", price: 0.042, change: 34.1 },
-  { name: "TOSHI", price: 0.0089, change: 5.6 },
-  { name: "WELL", price: 0.087, change: -1.4 },
-  { name: "USDbC", price: 1.00, change: 0.01 },
-  { name: "cbETH", price: 3842, change: 2.1 },
-];
+const POLL_INTERVAL_MS = 30_000; // poll alerts every 30s
 
-const ACTIONS = ["bought", "accumulated", "sold", "bridged in", "LP'd", "staked"];
-const AMOUNTS = ["$42K", "$128K", "$310K", "$890K", "$1.2M", "$2.4M", "$5.7M", "$12M"];
-
-const TRENDING = [
-  { token: "DEGEN", whale_count: 7, net_flow: "+$4.2M", signal: "Strong Buy" },
-  { token: "AERO", whale_count: 5, net_flow: "+$2.8M", signal: "Accumulating" },
-  { token: "MORPHO", whale_count: 4, net_flow: "+$1.6M", signal: "Bullish" },
-  { token: "BRETT", whale_count: 3, net_flow: "-$890K", signal: "Distribution" },
-  { token: "TOSHI", whale_count: 2, net_flow: "+$420K", signal: "Early Signal" },
-];
-
-function generateAlert(id) {
-  const wallet = MOCK_WALLETS[Math.floor(Math.random() * MOCK_WALLETS.length)];
-  const token = TOKENS[Math.floor(Math.random() * TOKENS.length)];
-  const action = ACTIONS[Math.floor(Math.random() * ACTIONS.length)];
-  const amount = AMOUNTS[Math.floor(Math.random() * AMOUNTS.length)];
-  const isBullish = ["bought", "accumulated", "bridged in", "LP'd", "staked"].includes(action);
-  const confidence = Math.floor(Math.random() * 30) + 70;
-  const minsAgo = Math.floor(Math.random() * 59);
-  const time = minsAgo === 0 ? "just now" : `${minsAgo}m ago`;
-  return {
-    id, wallet, token, action, amount, isBullish, confidence, time,
-    timestamp: Date.now() - minsAgo * 60000,
-    smartScore: Math.floor(Math.random() * 40) + 60,
-    followCount: Math.floor(Math.random() * 200) + 10,
+const badgeColor = (type) => {
+  const map = {
+    VC: { bg: "rgba(99,102,241,0.15)", color: "#818cf8" },
+    Whale: { bg: "rgba(0,255,238,0.1)", color: "#00ffee" },
+    Fund: { bg: "rgba(168,85,247,0.15)", color: "#c084fc" },
+    Protocol: { bg: "rgba(59,130,246,0.15)", color: "#60a5fa" },
+    Degen: { bg: "rgba(255,45,146,0.1)", color: "#ff2d92" },
   };
-}
-
-function generateAlerts(count) {
-  return Array.from({ length: count }, (_, i) => generateAlert(i)).sort((a, b) => b.timestamp - a.timestamp);
-}
-
-const badgeClass = (type) => {
-  const map = { VC: "badge-vc", Whale: "badge-whale", Fund: "badge-fund", Protocol: "badge-protocol", Degen: "badge-degen" };
-  return `badge ${map[type] || "badge-protocol"}`;
+  return map[type] || map.Protocol;
 };
 
-export default function BaseAlpha() {
-  const [alerts, setAlerts] = useState(() => generateAlerts(20));
-  const [filter, setFilter] = useState("all");
-  const [isPro, setIsPro] = useState(false);
-  const [showPaywall, setShowPaywall] = useState(false);
-  const [tab, setTab] = useState("feed");
-  const [alertsViewed, setAlertsViewed] = useState(0);
-  const [liveCount, setLiveCount] = useState(0);
+function timeAgo(ts) {
+  if (!ts) return "";
+  const ms = Date.now() - new Date(ts).getTime();
+  const mins = Math.floor(ms / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.floor(hrs / 24)}d ago`;
+}
 
-  useEffect(() => {
-    const interval = setInterval(() => {
-      const newAlert = generateAlert(Date.now());
-      setAlerts((prev) => [newAlert, ...prev.slice(0, 49)]);
-      setLiveCount((c) => c + 1);
-    }, 8000);
-    return () => clearInterval(interval);
+export default function BaseAlpha({ apiUrl }) {
+  const { address, connected } = useWallet();
+  const [alerts, setAlerts] = useState([]);
+  const [trending, setTrending] = useState([]);
+  const [trackedWallets, setTrackedWallets] = useState([]);
+  const [subscription, setSubscription] = useState({ tier: "free", isActive: false });
+  const [tab, setTab] = useState("feed");
+  const [filter, setFilter] = useState("all");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  const isPro = subscription.tier === "pro" || subscription.tier === "whale";
+  const API = apiUrl || "";
+
+  // ─── Fetch alerts ──────────────────────────────────────────
+  const fetchAlerts = useCallback(async () => {
+    try {
+      const tier = isPro ? "pro" : "free";
+      const res = await fetch(`${API}/api/alpha/alerts?tier=${tier}&wallet=${address || ""}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      setAlerts(data.alerts || []);
+      setError(null);
+    } catch (err) {
+      console.warn("[BaseAlpha] fetch alerts:", err.message);
+      setError(err.message);
+    }
+  }, [API, address, isPro]);
+
+  // ─── Fetch trending ────────────────────────────────────────
+  const fetchTrending = useCallback(async () => {
+    try {
+      const res = await fetch(`${API}/api/alpha/trending`);
+      if (!res.ok) return;
+      const data = await res.json();
+      setTrending(data.trending || []);
+    } catch { /* silent */ }
+  }, [API]);
+
+  // ─── Fetch subscription ────────────────────────────────────
+  const fetchSubscription = useCallback(async () => {
+    if (!address) return;
+    try {
+      const res = await fetch(`${API}/api/alpha/subscription/${address}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      setSubscription(data);
+    } catch { /* silent */ }
+  }, [API, address]);
+
+  // ─── Fetch tracked wallets ─────────────────────────────────
+  const fetchTrackedWallets = useCallback(async () => {
+    try {
+      // The webhook.js loads tracked wallets — we read them from a lightweight endpoint
+      // If no dedicated endpoint exists, we show a static count from the logs
+      setTrackedWallets([]); // Will be populated when wallet tracking endpoint is added
+    } catch { /* silent */ }
   }, []);
 
-  const handleAlertClick = (alert) => {
-    if (!isPro && alertsViewed >= 3) { setShowPaywall(true); return; }
-    setAlertsViewed((v) => v + 1);
+  // ─── Initial load + polling ────────────────────────────────
+  useEffect(() => {
+    setLoading(true);
+    Promise.all([fetchAlerts(), fetchTrending(), fetchSubscription(), fetchTrackedWallets()])
+      .finally(() => setLoading(false));
+
+    const interval = setInterval(fetchAlerts, POLL_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, [fetchAlerts, fetchTrending, fetchSubscription, fetchTrackedWallets]);
+
+  // ─── Filter alerts ─────────────────────────────────────────
+  const filteredAlerts = filter === "all" ? alerts
+    : filter === "bullish" ? alerts.filter(a => ["bought", "accumulated", "bridged_in", "lp", "staked"].includes(a.action))
+    : alerts.filter(a => ["sold", "withdrew", "unstaked"].includes(a.action));
+
+  // ─── Styles (inline, sci-fi, mobile-first) ─────────────────
+  const S = {
+    root: {
+      minHeight: "calc(100vh - 60px)",
+      background: "#04040a",
+      color: "#dcdce5",
+      fontFamily: '"JetBrains Mono", monospace',
+    },
+    page: { padding: "16px 16px 32px", maxWidth: 800, margin: "0 auto" },
+    header: {
+      display: "flex", justifyContent: "space-between", alignItems: "flex-start",
+      flexWrap: "wrap", gap: 12, marginBottom: 20,
+    },
+    title: { fontSize: 22, fontWeight: 900, letterSpacing: "0.08em", color: "#00ffee", margin: 0 },
+    subtitle: { fontSize: 10, color: "#6a6a82", letterSpacing: "0.15em", textTransform: "uppercase", marginTop: 4 },
+    tabs: {
+      display: "flex", gap: 6, marginBottom: 16, overflowX: "auto",
+      WebkitOverflowScrolling: "touch", paddingBottom: 4,
+    },
+    tab: (active) => ({
+      padding: "8px 16px", borderRadius: 8, border: "1px solid",
+      borderColor: active ? "#00ffee" : "#1a1a2e",
+      background: active ? "rgba(0,255,238,0.08)" : "transparent",
+      color: active ? "#00ffee" : "#6a6a82",
+      fontSize: 11, fontWeight: 600, cursor: "pointer",
+      whiteSpace: "nowrap", minHeight: 36,
+      fontFamily: '"JetBrains Mono", monospace',
+      letterSpacing: "0.08em",
+    }),
+    filterRow: { display: "flex", gap: 6, marginBottom: 14, flexWrap: "wrap", alignItems: "center" },
+    filterPill: (active) => ({
+      padding: "6px 12px", borderRadius: 6,
+      border: `1px solid ${active ? "#00ffee33" : "#1a1a2e"}`,
+      background: active ? "rgba(0,255,238,0.06)" : "transparent",
+      color: active ? "#00ffee" : "#6a6a82",
+      fontSize: 10, cursor: "pointer", fontFamily: '"JetBrains Mono", monospace',
+      minHeight: 32,
+    }),
+    card: {
+      background: "rgba(8,8,18,0.9)", border: "1px solid #1a1a2e",
+      borderRadius: 10, overflow: "hidden",
+    },
+    alertRow: {
+      display: "flex", gap: 12, padding: "14px 16px",
+      borderBottom: "1px solid #0f0f1a", alignItems: "flex-start",
+      cursor: "pointer", transition: "background 0.15s",
+    },
+    badge: (type) => {
+      const c = badgeColor(type);
+      return {
+        padding: "3px 8px", borderRadius: 4, fontSize: 9,
+        fontWeight: 700, letterSpacing: "0.1em",
+        background: c.bg, color: c.color,
+        whiteSpace: "nowrap", flexShrink: 0,
+      };
+    },
+    emptyState: {
+      textAlign: "center", padding: "60px 20px",
+      color: "#6a6a82", fontSize: 12,
+      fontFamily: '"JetBrains Mono", monospace',
+    },
+    trendingRow: {
+      display: "flex", alignItems: "center", padding: "12px 16px",
+      borderBottom: "1px solid #0f0f1a", gap: 8, flexWrap: "wrap",
+    },
+    signalBadge: (signal) => ({
+      padding: "3px 8px", borderRadius: 4, fontSize: 9, fontWeight: 700,
+      background: signal.includes("Distribution") || signal.includes("Sell")
+        ? "rgba(255,45,146,0.1)" : "rgba(0,255,136,0.1)",
+      color: signal.includes("Distribution") || signal.includes("Sell")
+        ? "#ff2d92" : "#00ff88",
+    }),
+    liveIndicator: {
+      display: "inline-flex", alignItems: "center", gap: 6,
+      fontSize: 10, color: "#00ff88",
+    },
+    liveDot: {
+      width: 6, height: 6, borderRadius: "50%", background: "#00ff88",
+      animation: "pulse-ring 2s infinite",
+    },
   };
 
-  const filteredAlerts = filter === "all" ? alerts : alerts.filter((a) => filter === "bullish" ? a.isBullish : !a.isBullish);
-
   return (
-    <div>
-      {/* Ticker */}
-      <div className="ticker-bar">
-        <div className="ticker-track">
-          {[...TOKENS, ...TOKENS].map((t, i) => (
-            <span key={i} className="ticker-item">
-              <span className="ticker-symbol">{t.name}</span>
-              <span className="ticker-price">${t.price}</span>
-              <span className={t.change >= 0 ? "ticker-up" : "ticker-down"}>
-                {t.change >= 0 ? "+" : ""}{t.change}%
-              </span>
-            </span>
-          ))}
-        </div>
-      </div>
+    <div style={S.root}>
+      <style>{`
+        @keyframes pulse-ring { 0% { transform: scale(0.8); opacity: 0.8; } 100% { transform: scale(2); opacity: 0; } }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+      `}</style>
 
-      <div className="app-page">
+      <div style={S.page}>
         {/* Header */}
-        <div className="app-header">
-          <div className="app-title">
-            <div className="app-title-icon" style={{ background: "var(--blue-bg)" }}>⚡</div>
-            <div>
-              <h1>Base Alpha</h1>
-              <p>Smart Money Intelligence</p>
-            </div>
+        <div style={S.header}>
+          <div>
+            <h1 style={S.title}>BASE ALPHA</h1>
+            <div style={S.subtitle}>smart money intelligence · base mainnet</div>
           </div>
-          <div className="app-header-right">
-            <div className="live-badge">
-              <span className="live-badge-dot" />
-              <span style={{ color: "var(--text)" }}>{liveCount + 847}</span> signals today
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <div style={S.liveIndicator}>
+              <span style={S.liveDot} />
+              LIVE
             </div>
-            {!isPro ? (
-              <button className="btn-cta" onClick={() => setShowPaywall(true)}>
-                Go Pro — $9.99/mo
-              </button>
-            ) : (
-              <span className="badge" style={{ background: "var(--blue-bg)", color: "var(--blue)", padding: "6px 14px", fontSize: 12 }}>
-                ⚡ PRO
-              </span>
+            {isPro && (
+              <span style={{ ...S.badge("VC"), background: "rgba(0,255,238,0.1)", color: "#00ffee" }}>PRO</span>
             )}
           </div>
         </div>
 
         {/* Tabs */}
-        <div className="filter-group" style={{ marginBottom: 24 }}>
-          {["feed", "trending", "wallets"].map((t) => (
-            <button key={t} className={`filter-pill ${tab === t ? "active" : ""}`} onClick={() => setTab(t)}>
-              {t === "feed" && "⚡ "}{t === "trending" && "🔥 "}{t === "wallets" && "👁 "}
-              {t.charAt(0).toUpperCase() + t.slice(1)}
+        <div style={S.tabs}>
+          {[
+            { key: "feed", label: "Alert Feed" },
+            { key: "trending", label: "Trending" },
+            { key: "wallets", label: `Tracked Wallets (18)` },
+          ].map(t => (
+            <button key={t.key} style={S.tab(tab === t.key)} onClick={() => setTab(t.key)}>
+              {t.label}
             </button>
           ))}
         </div>
 
-        {/* Feed Tab */}
+        {/* ─── ALERT FEED TAB ─────────────────────────────────── */}
         {tab === "feed" && (
           <>
-            <div className="filter-group">
-              {["all", "bullish", "bearish"].map((f) => (
-                <button key={f} className={`filter-pill ${filter === f ? "active" : ""}`} onClick={() => setFilter(f)}>
+            <div style={S.filterRow}>
+              {["all", "bullish", "bearish"].map(f => (
+                <button key={f} style={S.filterPill(filter === f)} onClick={() => setFilter(f)}>
                   {f === "bullish" && "🟢 "}{f === "bearish" && "🔴 "}
                   {f.charAt(0).toUpperCase() + f.slice(1)}
                 </button>
               ))}
-              <span style={{ marginLeft: "auto", fontSize: 13, color: "var(--text-dim)", fontFamily: "var(--mono)" }}>
+              <span style={{ marginLeft: "auto", fontSize: 10, color: "#6a6a82" }}>
                 {filteredAlerts.length} alerts
               </span>
             </div>
 
-            <div className="feed-list">
-              {filteredAlerts.slice(0, isPro ? 50 : 5).map((alert) => (
-                <div key={alert.id} className="feed-item" onClick={() => handleAlertClick(alert)}>
-                  <span className={badgeClass(alert.wallet.type)}>{alert.wallet.type}</span>
-                  <div>
-                    <div>
-                      <span className="feed-wallet-name">{alert.wallet.label}</span>
-                      <span className="feed-wallet-addr" style={{ marginLeft: 8 }}>{alert.wallet.address}</span>
-                    </div>
-                    <div style={{ marginTop: 6 }}>
-                      <span className={`feed-action ${alert.isBullish ? "bullish" : "bearish"}`}>
-                        {alert.action} {alert.amount}
-                      </span>
-                      <span style={{ color: "var(--text-dim)", margin: "0 6px" }}>of</span>
-                      <span className="feed-token">${alert.token.name}</span>
-                    </div>
-                    <div className="feed-meta">
-                      <span className="feed-meta-item">Confidence <span className="feed-meta-value">{alert.confidence}%</span></span>
-                      <span className="feed-meta-item">Smart Score <span className="feed-meta-value" style={{ color: "var(--blue)" }}>{alert.smartScore}</span></span>
-                      <span className="feed-meta-item">Followers <span className="feed-meta-value" style={{ color: "var(--purple)" }}>{alert.followCount}</span></span>
-                    </div>
-                  </div>
-                  <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 8 }}>
-                    <span className="feed-time">{alert.time}</span>
-                    <a href="#" className="feed-cta">Copy Trade →</a>
-                  </div>
+            {loading ? (
+              <div style={S.emptyState}>
+                <div style={{ fontSize: 24, marginBottom: 12 }}>◌</div>
+                Loading alerts...
+              </div>
+            ) : filteredAlerts.length === 0 ? (
+              <div style={S.emptyState}>
+                <div style={{ fontSize: 32, marginBottom: 16 }}>◇</div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: "#dcdce5", marginBottom: 8 }}>
+                  No alerts yet
                 </div>
-              ))}
-            </div>
+                <div style={{ maxWidth: 320, margin: "0 auto", lineHeight: 1.6 }}>
+                  Alerts appear here when your Alchemy webhook detects on-chain activity
+                  from tracked wallets and writes to the alpha_alerts table.
+                </div>
+                <div style={{ marginTop: 16, padding: "10px 14px", background: "#0a0a14", border: "1px solid #1a1a2e", borderRadius: 8, display: "inline-block" }}>
+                  <span style={{ color: "#6a6a82" }}>Status: </span>
+                  <span style={{ color: "#ff9f43" }}>wallet-poller disabled</span>
+                </div>
+              </div>
+            ) : (
+              <div style={S.card}>
+                {filteredAlerts.map((alert, i) => (
+                  <div
+                    key={alert.id || i}
+                    style={S.alertRow}
+                    onMouseEnter={e => e.currentTarget.style.background = "rgba(0,255,238,0.02)"}
+                    onMouseLeave={e => e.currentTarget.style.background = "transparent"}
+                  >
+                    <span style={S.badge(alert.wallet_type || alert.type || "Whale")}>
+                      {alert.wallet_type || alert.type || "?"}
+                    </span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                        <span style={{ fontWeight: 700, fontSize: 12, color: "#dcdce5" }}>
+                          {alert.wallet_label || alert.from_address?.slice(0, 8) || "Unknown"}
+                        </span>
+                        {alert.from_address && (
+                          <span style={{ fontSize: 10, color: "#6a6a82" }}>
+                            {alert.from_address.slice(0, 6)}...{alert.from_address.slice(-4)}
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ marginTop: 4, fontSize: 11 }}>
+                        <span style={{
+                          color: ["bought", "accumulated", "bridged_in", "lp", "staked"].includes(alert.action)
+                            ? "#00ff88" : "#ff2d92",
+                          fontWeight: 600,
+                        }}>
+                          {alert.action || "transferred"}
+                        </span>
+                        {alert.amount_usd && (
+                          <span style={{ color: "#dcdce5", marginLeft: 6 }}>
+                            ${Number(alert.amount_usd).toLocaleString()}
+                          </span>
+                        )}
+                        {alert.token_symbol && (
+                          <>
+                            <span style={{ color: "#6a6a82", margin: "0 4px" }}>of</span>
+                            <span style={{ color: "#00ffee", fontWeight: 600 }}>${alert.token_symbol}</span>
+                          </>
+                        )}
+                      </div>
+                      {alert.confidence && (
+                        <div style={{ marginTop: 4, fontSize: 9, color: "#6a6a82", display: "flex", gap: 12 }}>
+                          <span>Confidence <span style={{ color: "#00ff88" }}>{alert.confidence}%</span></span>
+                          {alert.tx_hash && (
+                            <a
+                              href={`https://basescan.org/tx/${alert.tx_hash}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              style={{ color: "#6a6a82", textDecoration: "none" }}
+                              onClick={e => e.stopPropagation()}
+                            >
+                              tx ↗
+                            </a>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                    <span style={{ fontSize: 9, color: "#6a6a82", whiteSpace: "nowrap", flexShrink: 0 }}>
+                      {timeAgo(alert.created_at)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
 
-            {!isPro && (
-              <div style={{ textAlign: "center", padding: "40px 0" }}>
-                <p style={{ color: "var(--text-dim)", marginBottom: 16, fontSize: 14 }}>
-                  🔒 Free users see 5 alerts. Upgrade for unlimited signals.
-                </p>
-                <button className="btn-cta" onClick={() => { setIsPro(true); setShowPaywall(false); }}>
-                  Upgrade to Pro — $9.99/mo
-                </button>
-                <p style={{ color: "var(--text-dim)", fontSize: 12, marginTop: 8 }}>7-day free trial • Cancel anytime</p>
+            {!isPro && alerts.length > 0 && (
+              <div style={{ textAlign: "center", padding: "30px 0", color: "#6a6a82", fontSize: 11 }}>
+                🔒 Free tier: showing {Math.min(alerts.length, 5)} of {alerts.length} alerts.
+                Upgrade for full feed.
               </div>
             )}
           </>
         )}
 
-        {/* Trending Tab */}
+        {/* ─── TRENDING TAB ───────────────────────────────────── */}
         {tab === "trending" && (
           <>
-            <div className="section-header">
-              <h2 className="section-title">🔥 Trending on Base — Last 24h</h2>
-            </div>
-            <p style={{ color: "var(--text-dim)", fontSize: 14, marginBottom: 20 }}>Tokens with the most smart money activity</p>
-            <div className="card">
-              <div className="card-header" style={{ fontSize: 11, fontFamily: "var(--mono)", color: "var(--text-dim)", textTransform: "uppercase", letterSpacing: 1 }}>
-                <span style={{ flex: 1 }}>Token</span>
-                <span style={{ flex: 1, textAlign: "center" }}>Whale Count</span>
-                <span style={{ flex: 1, textAlign: "center" }}>Net Flow</span>
-                <span style={{ flex: 1, textAlign: "right" }}>Signal</span>
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.1em", marginBottom: 4 }}>
+                TRENDING ON BASE
               </div>
-              {TRENDING.map((item, idx) => (
-                <div key={idx} style={{ display: "flex", alignItems: "center", padding: "14px 20px", borderTop: "1px solid var(--border)" }}>
-                  <span style={{ flex: 1, display: "flex", alignItems: "center", gap: 8 }}>
-                    <span style={{ color: "var(--text-dim)", fontFamily: "var(--mono)", fontSize: 12 }}>#{idx + 1}</span>
-                    <span style={{ fontWeight: 600, fontFamily: "var(--mono)" }}>${item.token}</span>
-                  </span>
-                  <span style={{ flex: 1, textAlign: "center", color: "var(--blue)", fontFamily: "var(--mono)" }}>{item.whale_count} whales</span>
-                  <span style={{ flex: 1, textAlign: "center", color: item.net_flow.startsWith("+") ? "var(--green)" : "var(--red)", fontFamily: "var(--mono)", fontWeight: 600 }}>
-                    {item.net_flow}
-                  </span>
-                  <span style={{ flex: 1, textAlign: "right" }}>
-                    <span className="badge" style={{
-                      background: item.signal === "Distribution" ? "var(--red-bg)" : "var(--green-bg)",
-                      color: item.signal === "Distribution" ? "var(--red)" : "var(--green)",
-                    }}>
-                      {item.signal}
-                    </span>
-                  </span>
-                </div>
-              ))}
+              <div style={{ fontSize: 10, color: "#6a6a82" }}>Tokens with most smart money activity · last 24h</div>
             </div>
+
+            {trending.length === 0 ? (
+              <div style={S.emptyState}>
+                <div style={{ fontSize: 32, marginBottom: 16 }}>◇</div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: "#dcdce5", marginBottom: 8 }}>
+                  No trending data
+                </div>
+                <div style={{ maxWidth: 320, margin: "0 auto", lineHeight: 1.6 }}>
+                  Trending tokens are computed from aggregated whale activity.
+                  Data populates when the alert pipeline is active.
+                </div>
+              </div>
+            ) : (
+              <div style={S.card}>
+                {/* Table header */}
+                <div style={{ display: "flex", padding: "10px 16px", fontSize: 9, color: "#6a6a82", letterSpacing: "0.15em", textTransform: "uppercase", borderBottom: "1px solid #1a1a2e" }}>
+                  <span style={{ flex: 1 }}>Token</span>
+                  <span style={{ width: 80, textAlign: "center" }}>Whales</span>
+                  <span style={{ width: 100, textAlign: "center" }}>Net Flow</span>
+                  <span style={{ width: 90, textAlign: "right" }}>Signal</span>
+                </div>
+                {trending.map((item, i) => (
+                  <div key={i} style={S.trendingRow}>
+                    <span style={{ flex: 1, display: "flex", alignItems: "center", gap: 8 }}>
+                      <span style={{ color: "#6a6a82", fontSize: 10 }}>#{i + 1}</span>
+                      <span style={{ fontWeight: 700, color: "#dcdce5" }}>${item.token || item.symbol}</span>
+                    </span>
+                    <span style={{ width: 80, textAlign: "center", color: "#00ffee", fontSize: 11 }}>
+                      {item.whale_count}
+                    </span>
+                    <span style={{
+                      width: 100, textAlign: "center", fontSize: 11, fontWeight: 600,
+                      color: String(item.net_flow || "").startsWith("-") ? "#ff2d92" : "#00ff88",
+                    }}>
+                      {item.net_flow || "—"}
+                    </span>
+                    <span style={{ width: 90, textAlign: "right" }}>
+                      <span style={S.signalBadge(item.signal || "")}>
+                        {item.signal || "—"}
+                      </span>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
           </>
         )}
 
-        {/* Wallets Tab */}
+        {/* ─── TRACKED WALLETS TAB ────────────────────────────── */}
         {tab === "wallets" && (
           <>
-            <div className="section-header">
-              <h2 className="section-title">👁 Tracked Smart Wallets</h2>
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.1em", marginBottom: 4 }}>
+                TRACKED WALLETS
+              </div>
+              <div style={{ fontSize: 10, color: "#6a6a82" }}>18 smart wallets monitored on Base</div>
             </div>
-            <p style={{ color: "var(--text-dim)", fontSize: 14, marginBottom: 20 }}>Elite wallets monitored in real-time on Base</p>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
-              {MOCK_WALLETS.map((w, idx) => (
-                <div key={idx} className="card" style={{ padding: 20 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-                    <span className={badgeClass(w.type)}>{w.type}</span>
-                    <span style={{ color: "var(--text-dim)", fontFamily: "var(--mono)", fontSize: 11 }}>{w.address}</span>
-                  </div>
-                  <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 14 }}>{w.label}</h3>
-                  <div style={{ display: "flex", justifyContent: "space-between", paddingTop: 12, borderTop: "1px solid var(--border)" }}>
-                    <div>
-                      <div style={{ fontSize: 11, color: "var(--text-dim)" }}>Win Rate</div>
-                      <div style={{ fontFamily: "var(--mono)", fontWeight: 600, color: "var(--green)" }}>{Math.floor(Math.random() * 25) + 65}%</div>
-                    </div>
-                    <div>
-                      <div style={{ fontSize: 11, color: "var(--text-dim)" }}>30d PnL</div>
-                      <div style={{ fontFamily: "var(--mono)", fontWeight: 600, color: "var(--green)" }}>+${(Math.random() * 5 + 0.5).toFixed(1)}M</div>
-                    </div>
-                    <div>
-                      <div style={{ fontSize: 11, color: "var(--text-dim)" }}>Trades</div>
-                      <div style={{ fontFamily: "var(--mono)", fontWeight: 600 }}>{Math.floor(Math.random() * 200) + 40}</div>
-                    </div>
-                  </div>
-                </div>
-              ))}
+
+            <div style={S.emptyState}>
+              <div style={{ fontSize: 32, marginBottom: 16 }}>👁</div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: "#dcdce5", marginBottom: 8 }}>
+                18 wallets tracked
+              </div>
+              <div style={{ maxWidth: 340, margin: "0 auto", lineHeight: 1.6 }}>
+                The webhook receiver monitors on-chain activity from 18 curated smart wallets on Base.
+                Wallet details are hidden to protect alpha.
+              </div>
+              <div style={{ marginTop: 20, display: "flex", justifyContent: "center", gap: 8, flexWrap: "wrap" }}>
+                {["VC", "Whale", "Fund", "Protocol", "Degen"].map(type => (
+                  <span key={type} style={S.badge(type)}>{type}</span>
+                ))}
+              </div>
             </div>
           </>
         )}
       </div>
-
-      {/* Paywall Modal */}
-      {showPaywall && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.8)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 20 }}
-          onClick={() => setShowPaywall(false)}>
-          <div className="card" style={{ maxWidth: 420, width: "100%", padding: "36px 32px", position: "relative" }} onClick={(e) => e.stopPropagation()}>
-            <button style={{ position: "absolute", top: 12, right: 16, background: "none", border: "none", color: "var(--text-dim)", fontSize: 18, cursor: "pointer" }} onClick={() => setShowPaywall(false)}>✕</button>
-            <div style={{ fontSize: 40, textAlign: "center", marginBottom: 12 }}>⚡</div>
-            <h2 style={{ fontSize: 24, fontWeight: 700, textAlign: "center", marginBottom: 4 }}>Base Alpha Pro</h2>
-            <p style={{ textAlign: "center", marginBottom: 24 }}>
-              <span style={{ fontSize: 48, fontWeight: 700, color: "var(--blue)" }}>$9.99</span>
-              <span style={{ color: "var(--text-dim)" }}>/month</span>
-            </p>
-            <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 24 }}>
-              {[
-                "Unlimited real-time smart money alerts",
-                "Advanced wallet & token filters",
-                "One-click copy trading via Coinbase Wallet",
-                "Custom alert rules & Telegram notifications",
-                "API access for your own bots",
-                "Priority signal latency (<2s)",
-              ].map((f, i) => (
-                <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 13, color: "var(--text-secondary)" }}>
-                  <span style={{ color: "var(--green)" }}>✓</span>
-                  <span>{f}</span>
-                </div>
-              ))}
-            </div>
-            <button className="btn-cta" style={{ width: "100%" }} onClick={() => { setIsPro(true); setShowPaywall(false); }}>
-              Start 7-Day Free Trial
-            </button>
-            <p style={{ color: "var(--text-dim)", fontSize: 12, marginTop: 8, textAlign: "center" }}>
-              No credit card required • Cancel anytime
-            </p>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

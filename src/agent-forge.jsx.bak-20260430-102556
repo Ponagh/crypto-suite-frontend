@@ -1275,36 +1275,15 @@ function AgentCard({ agent, onPause, onResume, onDelete, onInspect, onEditPolicy
         </span>
         <span>{deployedAgo < 1 ? "just now" : `${deployedAgo}m ago`}</span>
       </div>
-      {/* Live mode indicator + last tx link */}
-      {agent.mode === "live" && agent.last_tx_hash && (
-        <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6, fontSize: 9, fontFamily: '"JetBrains Mono", monospace' }}>
-          <span className="af-live-pulse" style={{ width: 6, height: 6, borderRadius: "50%", background: "#ff2d92", display: "inline-block" }} />
-          <span style={{ color: "#ff2d92", letterSpacing: "0.1em" }}>LIVE</span>
-          <a
-            href={`https://basescan.org/tx/${agent.last_tx_hash}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            style={{ color: "#6a6a82", textDecoration: "none", marginLeft: "auto" }}
-            onClick={e => e.stopPropagation()}
-          >
-            tx {agent.last_tx_hash.slice(0, 8)}...{agent.last_tx_hash.slice(-4)} ↗
-          </a>
-        </div>
-      )}
-      <div className="af-action-row" onClick={e => e.stopPropagation()}>
+      <div style={{ display: "flex", gap: 6, marginTop: 14, flexWrap: "wrap" }} onClick={e => e.stopPropagation()}>
         {agent.status === "halted" ? (
-          // Halted agents (whether reached via manual halt or auto-halt) always
-          // need an UNHALT path back to running. Shown regardless of mode.
           <GlowButton onClick={() => onUnhalt(agent.id)} color="#ff2d92" variant="ghost" size="sm" style={{ flex: 1 }}>UNHALT</GlowButton>
         ) : canToggle && (
           agent.status === "running"
             ? <GlowButton onClick={() => onPause(agent.id)} color="#ff9500" variant="ghost" size="sm" style={{ flex: 1 }}>PAUSE</GlowButton>
             : <GlowButton onClick={() => onResume(agent.id)} color="#00ff88" variant="ghost" size="sm" style={{ flex: 1 }}>RESUME</GlowButton>
         )}
-        {/* HALT only meaningful in LIVE mode — in paper mode PAUSE is functionally
-            identical and avoids cluttering the action row. Auto-halt from policy
-            violations still works in paper; this just hides the manual button. */}
-        {agent.status !== "halted" && agent.mode === "live" && (
+        {agent.status !== "halted" && (
           <GlowButton onClick={() => onHalt(agent.id)} color="#ff2d92" variant="ghost" size="sm" style={{ flex: 1 }}>HALT</GlowButton>
         )}
         <GlowButton onClick={() => onEditPolicy && onEditPolicy(agent, "risk")} color="#a855f7" variant="ghost" size="sm" style={{ flex: 1 }}>POLICY</GlowButton>
@@ -1488,8 +1467,8 @@ function AgentDetailDrawer({ agent, open, onClose, apiUrl }) {
   if (!open || !agent) return null;
   const logColors = { info: "#00ffee", scan: "#8a8a9e", signal: "#ff9500", action: "#a855ff", success: "#00ff88", error: "#ff2d92" };
   return (
-    <div className="af-drawer-overlay" style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 1000, backdropFilter: "blur(4px)", display: "flex", justifyContent: "flex-end" }} onClick={onClose}>
-      <div className="af-drawer-panel" style={{ width: "min(520px, 92vw)", height: "100vh", background: "#07070d", borderLeft: `1px solid ${agent.color}44`, padding: 26, overflowY: "auto", animation: "slide-in 0.25s ease-out", WebkitOverflowScrolling: "touch" }} onClick={e => e.stopPropagation()}>
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 1000, backdropFilter: "blur(4px)", display: "flex", justifyContent: "flex-end" }} onClick={onClose}>
+      <div style={{ width: "min(520px, 92vw)", height: "100vh", background: "#07070d", borderLeft: `1px solid ${agent.color}44`, padding: 26, overflowY: "auto", animation: "slide-in 0.25s ease-out" }} onClick={e => e.stopPropagation()}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 22 }}>
           <div>
             <div style={{ fontSize: 10, letterSpacing: "0.3em", color: agent.color, fontFamily: '"JetBrains Mono", monospace', marginBottom: 6, textShadow: `0 0 8px ${agent.color}` }}>[ AGENT_INSPECTOR ]</div>
@@ -1525,35 +1504,6 @@ function AgentDetailDrawer({ agent, open, onClose, apiUrl }) {
                 </div>
               ))
             )}
-          </div>
-        </div>
-        {/* Live trade history with on-chain links */}
-        <div style={{ marginBottom: 22 }}>
-          <div style={{ fontSize: 10, letterSpacing: "0.2em", color: "#6a6a82", fontFamily: '"JetBrains Mono", monospace', marginBottom: 10 }}>
-            RECENT_TRADES {agent.mode === "live" && <span style={{ color: "#ff2d92" }}>· LIVE</span>}
-          </div>
-          <div style={{ padding: 14, background: "rgba(5,5,12,0.8)", border: "1px solid #1a1a2e", fontFamily: '"JetBrains Mono", monospace', fontSize: 10, maxHeight: 200, overflowY: "auto", WebkitOverflowScrolling: "touch" }}>
-            {(!agent.trades || agent.trades.length === 0) ? (
-              <span style={{ color: "#6a6a82" }}>No trades recorded</span>
-            ) : agent.trades.slice(0, 10).map((t, i) => (
-              <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 0", borderBottom: i < Math.min(agent.trades.length, 10) - 1 ? "1px solid #1a1a2e" : "none", flexWrap: "wrap" }}>
-                <span style={{ color: t.side === "buy" ? "#00ff88" : "#ff2d92", fontWeight: 700, width: 30 }}>{(t.side || "—").toUpperCase()}</span>
-                <span style={{ color: "#dcdce5" }}>{t.asset_in || "?"} → {t.asset_out || "?"}</span>
-                {t.router_used && <span style={{ color: "#6a6a82", fontSize: 9 }}>via {t.router_used}</span>}
-                <span style={{ marginLeft: "auto", color: "#6a6a82", fontSize: 9 }}>{t.mode === "live" ? "🔴" : "📄"}</span>
-                {t.tx_hash && (
-                  <a
-                    href={`https://basescan.org/tx/${t.tx_hash}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    style={{ color: agent.color, textDecoration: "none", fontSize: 9 }}
-                    onClick={e => e.stopPropagation()}
-                  >
-                    {t.tx_hash.slice(0, 8)}... ↗
-                  </a>
-                )}
-              </div>
-            ))}
           </div>
         </div>
         <div>
@@ -1845,186 +1795,25 @@ export default function AgentForge({ apiUrl }) {
   const tierMeta = TIER_META[subscription.tier] || TIER_META[0];
 
   return (
-    <div className="af-root" style={{ minHeight: "calc(100vh - 60px)", background: `radial-gradient(ellipse at top left, rgba(0,255,238,0.04), transparent 50%), radial-gradient(ellipse at bottom right, rgba(255,45,146,0.04), transparent 50%), #04040a`, padding: "20px 24px", color: "#dcdce5" }}>
+    <div style={{ minHeight: "calc(100vh - 60px)", background: `radial-gradient(ellipse at top left, rgba(0,255,238,0.04), transparent 50%), radial-gradient(ellipse at bottom right, rgba(255,45,146,0.04), transparent 50%), #04040a`, padding: "20px 24px", color: "#dcdce5" }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;900&display=swap');
         @keyframes pulse-ring { 0% { transform: scale(0.8); opacity: 0.8; } 100% { transform: scale(2); opacity: 0; } }
         @keyframes slide-in { from { transform: translateX(100%); } to { transform: translateX(0); } }
-        @keyframes slide-up { from { transform: translateY(100%); } to { transform: translateY(0); } }
-        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-
-        /* ─── Mobile-first responsive layer ─────────────────────── */
-        *, *::before, *::after { box-sizing: border-box; }
-
-        /* Safe area for notched phones */
-        .af-root {
-          padding-bottom: env(safe-area-inset-bottom, 0px) !important;
-        }
-
-        /* Card grid — stack on mobile */
-        @media (max-width: 480px) {
-          .af-card-grid {
-            grid-template-columns: 1fr !important;
-            gap: 10px !important;
-          }
-          .af-root {
-            padding: 12px 10px !important;
-          }
-          .af-hero-stats {
-            flex-direction: column !important;
-            gap: 10px !important;
-          }
-          .af-section-header {
-            flex-direction: column !important;
-            align-items: flex-start !important;
-            gap: 8px !important;
-          }
-          .af-section-controls {
-            width: 100% !important;
-            justify-content: space-between !important;
-          }
-        }
-
-        /* Drawer — bottom sheet on mobile, side panel on desktop */
-        @media (max-width: 640px) {
-          .af-drawer-overlay {
-            align-items: flex-end !important;
-            justify-content: center !important;
-          }
-          .af-drawer-panel {
-            width: 100% !important;
-            height: 85vh !important;
-            max-height: 85vh !important;
-            border-left: none !important;
-            border-top: 1px solid rgba(0,255,238,0.2) !important;
-            border-radius: 16px 16px 0 0 !important;
-            animation: slide-up 0.25s ease-out !important;
-          }
-          .af-drawer-panel::before {
-            content: '';
-            display: block;
-            width: 36px;
-            height: 4px;
-            background: #333;
-            border-radius: 2px;
-            margin: 0 auto 16px;
-          }
-        }
-
-        /* Modals — full screen on mobile */
-        @media (max-width: 640px) {
-          .af-modal-content {
-            width: 100% !important;
-            max-width: 100% !important;
-            max-height: 100vh !important;
-            height: 100vh !important;
-            border-radius: 0 !important;
-            margin: 0 !important;
-          }
-          .af-modal-overlay {
-            padding: 0 !important;
-          }
-        }
-
-        /* Button row — wrap on mobile */
-        .af-action-row {
-          display: flex;
-          gap: 6px;
-          margin-top: 14px;
-          flex-wrap: wrap;
-        }
-        @media (max-width: 480px) {
-          .af-action-row > * {
-            flex: 1 1 calc(50% - 3px) !important;
-            min-width: calc(50% - 3px) !important;
-          }
-        }
-
-        /* Touch targets — minimum 44px on mobile */
-        @media (max-width: 640px) {
-          button, a[role="button"], [role="button"] {
-            min-height: 44px !important;
-          }
-          .af-range-btn {
-            min-width: 44px !important;
-            min-height: 36px !important;
-          }
-        }
-
-        /* Donut chart — scale down on mobile */
-        @media (max-width: 480px) {
-          .af-donut-wrap {
-            flex-direction: column !important;
-            align-items: center !important;
-          }
-        }
-
-        /* Subscription card — stack on mobile */
-        @media (max-width: 480px) {
-          .af-sub-card {
-            flex-direction: column !important;
-            gap: 10px !important;
-          }
-          .af-sub-badges {
-            flex-wrap: wrap !important;
-            gap: 6px !important;
-          }
-        }
-
-        /* Policy modal tabs — scroll horizontal on mobile */
-        @media (max-width: 480px) {
-          .af-policy-tabs {
-            overflow-x: auto !important;
-            -webkit-overflow-scrolling: touch !important;
-            gap: 4px !important;
-          }
-          .af-policy-tabs > * {
-            white-space: nowrap !important;
-            flex-shrink: 0 !important;
-          }
-        }
-
-        /* Create agent modal — template grid */
-        @media (max-width: 480px) {
-          .af-template-grid {
-            grid-template-columns: 1fr !important;
-          }
-        }
-
-        /* Metric values — scale text on mobile */
-        @media (max-width: 380px) {
-          .af-metric-value {
-            font-size: 14px !important;
-          }
-          .af-metric-label {
-            font-size: 8px !important;
-          }
-        }
-
-        /* Live mode indicator pulse */
-        .af-live-pulse {
-          animation: pulse-ring 2s infinite;
-        }
-
-        /* Scrollbar styling */
-        ::-webkit-scrollbar { width: 4px; height: 4px; }
-        ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: #333; border-radius: 2px; }
-        ::-webkit-scrollbar-thumb:hover { background: #555; }
       `}</style>
 
       <HeroStats subscription={subscription} agents={agents} />
       <AllocationDonut agents={agents} />
       <SubscriptionCard subscription={subscription} isAllowlisted={isAllowlisted} onUpgrade={handleUpgrade} />
 
-      <div className="af-section-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 12 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 12 }}>
         <div>
           <h2 style={{ fontSize: 14, fontWeight: 700, margin: 0, fontFamily: '"JetBrains Mono", monospace', letterSpacing: "0.05em" }}>DEPLOYED_AGENTS</h2>
           <div style={{ fontSize: 10, color: "#6a6a82", fontFamily: '"JetBrains Mono", monospace', marginTop: 2, letterSpacing: "0.1em" }}>
             {agents.length} total · {Math.max(0, subscription.agentsAllowed - agents.length)} slots remaining
           </div>
         </div>
-        <div className="af-section-controls" style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
           {agents.length > 0 && <RangePicker range={range} onChange={setRange} />}
           <GlowButton onClick={() => setCreateOpen(true)} color="#00ffee" size="md" disabled={!isConnected || agents.length >= tierMeta.allowed}>
             {!isConnected ? "CONNECT WALLET" : "+ DEPLOY AGENT"}
@@ -2043,7 +1832,7 @@ export default function AgentForge({ apiUrl }) {
           {isConnected && <GlowButton onClick={() => setCreateOpen(true)} color="#00ffee" size="lg">⚡ FORGE FIRST AGENT</GlowButton>}
         </div>
       ) : (
-        <div className="af-card-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(340px, 1fr))", gap: 12 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(360px, 1fr))", gap: 12 }}>
           {agents.map(agent => (
             <AgentCard
               key={agent.id}
