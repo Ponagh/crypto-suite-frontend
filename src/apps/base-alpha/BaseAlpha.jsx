@@ -225,7 +225,7 @@ export default function BaseAlpha({ apiUrl }) {
           {[
             { key: "feed", label: "Alert Feed" },
             { key: "trending", label: "Trending" },
-            { key: "wallets", label: `Tracked Wallets (18)` },
+            { key: "wallets", label: `Tracked Wallets (4)` },
           ].map(t => (
             <button key={t.key} style={S.tab(tab === t.key)} onClick={() => setTab(t.key)}>
               {t.label}
@@ -265,7 +265,7 @@ export default function BaseAlpha({ apiUrl }) {
                 </div>
                 <div style={{ marginTop: 16, padding: "10px 14px", background: "#0a0a14", border: "1px solid #1a1a2e", borderRadius: 8, display: "inline-block" }}>
                   <span style={{ color: "#6a6a82" }}>Status: </span>
-                  <span style={{ color: "#ff9f43" }}>wallet-poller disabled</span>
+                  <span style={{ color: "#00ff88" }}>wallet-poller active · polling every 5 min</span>
                 </div>
               </div>
             ) : (
@@ -409,13 +409,13 @@ export default function BaseAlpha({ apiUrl }) {
               <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.1em", marginBottom: 4 }}>
                 TRACKED WALLETS
               </div>
-              <div style={{ fontSize: 10, color: "#6a6a82" }}>18 smart wallets monitored on Base</div>
+              <div style={{ fontSize: 10, color: "#6a6a82" }}>4 smart wallets monitored on Base</div>
             </div>
 
             <div style={S.emptyState}>
               <div style={{ fontSize: 32, marginBottom: 16 }}>👁</div>
               <div style={{ fontSize: 14, fontWeight: 700, color: "#dcdce5", marginBottom: 8 }}>
-                18 wallets tracked
+                4 wallets tracked
               </div>
               <div style={{ maxWidth: 340, margin: "0 auto", lineHeight: 1.6 }}>
                 The webhook receiver monitors on-chain activity from 18 curated smart wallets on Base.
