@@ -418,7 +418,7 @@ export default function BaseAlpha({ apiUrl }) {
                 4 wallets tracked
               </div>
               <div style={{ maxWidth: 340, margin: "0 auto", lineHeight: 1.6 }}>
-                The webhook receiver monitors on-chain activity from 18 curated smart wallets on Base.
+                The webhook receiver monitors on-chain activity from 4 curated smart wallets on Base.
                 Wallet details are hidden to protect alpha.
               </div>
               <div style={{ marginTop: 20, display: "flex", justifyContent: "center", gap: 8, flexWrap: "wrap" }}>
