@@ -1521,8 +1521,23 @@ function WalletFundingPanel({ agent, apiUrl }) {
       {expanded && (
         <div style={{ padding: "0 14px 14px", fontFamily: '"JetBrains Mono", monospace' }}>
 
-          {/* ── Not provisioned (paper agent, never gone live) ── */}
-          {!loading && !isProvisioned && (
+          {/* ── Live mode, wallet not yet provisioned (first live activation) ── */}
+          {!loading && !isProvisioned && isLive && (
+            <div>
+              <div style={{ padding: 12, background: "rgba(255,45,146,0.04)", border: "1px solid rgba(255,45,146,0.2)", fontSize: 10, color: "#6a6a82", lineHeight: 1.7 }}>
+                <div style={{ color: "#ff2d92", fontWeight: 700, marginBottom: 6 }}>▲ LIVE MODE — WALLET PENDING</div>
+                This agent is in LIVE mode. A dedicated CDP wallet will be
+                automatically created and funded on the first live trade attempt.
+                <div style={{ marginTop: 10, color: "#dcdce5" }}>
+                  The wallet address will appear here after the first tick executes.
+                  Make sure the agent is running and check back in 2-3 minutes.
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ── Paper mode, no wallet needed ── */}
+          {!loading && !isProvisioned && !isLive && (
             <div>
               <div style={{ padding: 12, background: "rgba(0,255,238,0.04)", border: "1px solid rgba(0,255,238,0.1)", fontSize: 10, color: "#6a6a82", lineHeight: 1.7 }}>
                 <div style={{ color: "#00ffee", fontWeight: 700, marginBottom: 6 }}>◈ PAPER MODE — NO WALLET NEEDED</div>
