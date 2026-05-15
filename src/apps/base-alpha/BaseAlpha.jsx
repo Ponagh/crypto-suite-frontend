@@ -5,11 +5,16 @@
  * Fetches from:
  *   GET /api/alpha/alerts?tier=free|pro   → alpha_alerts table
  *   GET /api/alpha/trending               → alpha_trending table
+ *   GET /api/alpha/wallets?wallet=0x...   → alpha_tracked_wallets table
  *   GET /api/alpha/subscription/:address  → on-chain subscription check
  *
  * When alpha_alerts is empty (wallet-poller disabled), shows a clear
  * "no alerts yet" state with explanation. When data exists, renders
  * the real feed with tier-gated limits.
+ *
+ * Tracked Wallets tab:
+ * - Admin (ADMIN_WALLET match): full addresses, Basescan links
+ * - Everyone else: truncated addresses, labels + types only
  */
 
 import { useState, useEffect, useCallback } from "react";
@@ -44,6 +49,8 @@ export default function BaseAlpha({ apiUrl }) {
   const [alerts, setAlerts] = useState([]);
   const [trending, setTrending] = useState([]);
   const [trackedWallets, setTrackedWallets] = useState([]);
+  const [walletCount, setWalletCount] = useState(0);
+  const [isAdminView, setIsAdminView] = useState(false);
   const [subscription, setSubscription] = useState({ tier: "free", isActive: false });
   const [tab, setTab] = useState("feed");
   const [filter, setFilter] = useState("all");
@@ -92,11 +99,14 @@ export default function BaseAlpha({ apiUrl }) {
   // ─── Fetch tracked wallets ─────────────────────────────────
   const fetchTrackedWallets = useCallback(async () => {
     try {
-      // The webhook.js loads tracked wallets — we read them from a lightweight endpoint
-      // If no dedicated endpoint exists, we show a static count from the logs
-      setTrackedWallets([]); // Will be populated when wallet tracking endpoint is added
+      const res = await fetch(`${API}/api/alpha/wallets?wallet=${address || ""}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      setTrackedWallets(data.wallets || []);
+      setWalletCount(data.count || 0);
+      setIsAdminView(data.admin === true);
     } catch { /* silent */ }
-  }, []);
+  }, [API, address]);
 
   // ─── Initial load + polling ────────────────────────────────
   useEffect(() => {
@@ -193,6 +203,25 @@ export default function BaseAlpha({ apiUrl }) {
       width: 6, height: 6, borderRadius: "50%", background: "#00ff88",
       animation: "pulse-ring 2s infinite",
     },
+    // ─── Tracked Wallets styles ────────────────────────────────
+    walletRow: {
+      display: "flex", alignItems: "center", padding: "12px 16px",
+      borderBottom: "1px solid #0f0f1a", gap: 10, flexWrap: "wrap",
+    },
+    walletAddress: (isAdmin) => ({
+      fontSize: 11, color: isAdmin ? "#00ffee" : "#6a6a82",
+      fontFamily: '"JetBrains Mono", monospace',
+      textDecoration: isAdmin ? "none" : "none",
+      cursor: isAdmin ? "pointer" : "default",
+    }),
+    walletLabel: {
+      fontSize: 12, fontWeight: 700, color: "#dcdce5",
+    },
+    adminBadge: {
+      padding: "2px 6px", borderRadius: 3, fontSize: 8,
+      fontWeight: 700, letterSpacing: "0.15em",
+      background: "rgba(0,255,136,0.1)", color: "#00ff88",
+    },
   };
 
   return (
@@ -220,12 +249,12 @@ export default function BaseAlpha({ apiUrl }) {
           </div>
         </div>
 
-        {/* Tabs */}
+        {/* Tabs — dynamic wallet count */}
         <div style={S.tabs}>
           {[
             { key: "feed", label: "Alert Feed" },
             { key: "trending", label: "Trending" },
-            { key: "wallets", label: `Tracked Wallets (4)` },
+            { key: "wallets", label: `Tracked Wallets (${walletCount || "..."})` },
           ].map(t => (
             <button key={t.key} style={S.tab(tab === t.key)} onClick={() => setTab(t.key)}>
               {t.label}
@@ -265,7 +294,7 @@ export default function BaseAlpha({ apiUrl }) {
                 </div>
                 <div style={{ marginTop: 16, padding: "10px 14px", background: "#0a0a14", border: "1px solid #1a1a2e", borderRadius: 8, display: "inline-block" }}>
                   <span style={{ color: "#6a6a82" }}>Status: </span>
-                  <span style={{ color: "#00ff88" }}>wallet-poller active · polling every 5 min</span>
+                  <span style={{ color: "#00ff88" }}>wallet-poller active · polling every 10 min</span>
                 </div>
               </div>
             ) : (
@@ -405,28 +434,92 @@ export default function BaseAlpha({ apiUrl }) {
         {/* ─── TRACKED WALLETS TAB ────────────────────────────── */}
         {tab === "wallets" && (
           <>
-            <div style={{ marginBottom: 16 }}>
-              <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.1em", marginBottom: 4 }}>
-                TRACKED WALLETS
+            <div style={{ marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.1em", marginBottom: 4 }}>
+                  TRACKED WALLETS
+                </div>
+                <div style={{ fontSize: 10, color: "#6a6a82" }}>
+                  {walletCount} smart wallets monitored on Base
+                  {isAdminView && " · admin view"}
+                </div>
               </div>
-              <div style={{ fontSize: 10, color: "#6a6a82" }}>4 smart wallets monitored on Base</div>
+              {isAdminView && (
+                <span style={S.adminBadge}>ADMIN</span>
+              )}
             </div>
 
-            <div style={S.emptyState}>
-              <div style={{ fontSize: 32, marginBottom: 16 }}>👁</div>
-              <div style={{ fontSize: 14, fontWeight: 700, color: "#dcdce5", marginBottom: 8 }}>
-                4 wallets tracked
+            {trackedWallets.length === 0 ? (
+              <div style={S.emptyState}>
+                <div style={{ fontSize: 32, marginBottom: 16 }}>◌</div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: "#dcdce5", marginBottom: 8 }}>
+                  Loading wallets...
+                </div>
               </div>
-              <div style={{ maxWidth: 340, margin: "0 auto", lineHeight: 1.6 }}>
-                The webhook receiver monitors on-chain activity from 4 curated smart wallets on Base.
-                Wallet details are hidden to protect alpha.
-              </div>
-              <div style={{ marginTop: 20, display: "flex", justifyContent: "center", gap: 8, flexWrap: "wrap" }}>
-                {["VC", "Whale", "Fund", "Protocol", "Degen"].map(type => (
-                  <span key={type} style={S.badge(type)}>{type}</span>
+            ) : (
+              <div style={S.card}>
+                {/* Table header */}
+                <div style={{
+                  display: "flex", padding: "10px 16px", fontSize: 9, color: "#6a6a82",
+                  letterSpacing: "0.15em", textTransform: "uppercase",
+                  borderBottom: "1px solid #1a1a2e", gap: 10,
+                }}>
+                  <span style={{ width: 70 }}>Type</span>
+                  <span style={{ flex: 1 }}>Label</span>
+                  <span style={{ flex: 1 }}>Address</span>
+                </div>
+
+                {trackedWallets.map((w, i) => (
+                  <div
+                    key={w.address + i}
+                    style={S.walletRow}
+                    onMouseEnter={e => e.currentTarget.style.background = "rgba(0,255,238,0.02)"}
+                    onMouseLeave={e => e.currentTarget.style.background = "transparent"}
+                  >
+                    <span style={{ width: 70, flexShrink: 0 }}>
+                      <span style={S.badge(w.type)}>{w.type}</span>
+                    </span>
+                    <span style={{ ...S.walletLabel, flex: 1 }}>
+                      {w.label}
+                    </span>
+                    <span style={{ flex: 1 }}>
+                      {isAdminView ? (
+                        <a
+                          href={`https://basescan.org/address/${w.address}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          style={{
+                            ...S.walletAddress(true),
+                            textDecoration: "none",
+                          }}
+                          title="View on Basescan"
+                        >
+                          {w.address.slice(0, 10)}...{w.address.slice(-6)} ↗
+                        </a>
+                      ) : (
+                        <span style={S.walletAddress(false)}>
+                          {w.address}
+                        </span>
+                      )}
+                    </span>
+                  </div>
                 ))}
               </div>
+            )}
+
+            {/* Type legend */}
+            <div style={{ marginTop: 20, display: "flex", justifyContent: "center", gap: 8, flexWrap: "wrap" }}>
+              {["VC", "Whale", "Fund", "Protocol", "Degen"].map(type => (
+                <span key={type} style={S.badge(type)}>{type}</span>
+              ))}
             </div>
+
+            {!isAdminView && (
+              <div style={{ textAlign: "center", marginTop: 16, fontSize: 10, color: "#6a6a82" }}>
+                Wallet addresses are truncated to protect alpha.
+                {connected ? "" : " Connect wallet for personalized view."}
+              </div>
+            )}
           </>
         )}
       </div>
