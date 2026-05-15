@@ -64,6 +64,8 @@ const hydrateAgent = (row) => {
     drawdown_pct: row.drawdown_pct != null ? Number(row.drawdown_pct) : null,
     // Wave 2 — recent trades for scatter chart
     trades: Array.isArray(row.trades) ? row.trades : [],
+    // CDP wallet address — populated by dashboard endpoint from agent_policies join
+    cdp_address: row.cdp_account_address || row.cdp_address || null,
   };
 };
 
@@ -1221,6 +1223,14 @@ function AgentCard({ agent, onPause, onResume, onDelete, onInspect, onEditPolicy
               <ModeBadge mode={agent.mode} />
             </div>
             <div style={{ fontSize: 9, color: "#6a6a82", fontFamily: '"JetBrains Mono", monospace', marginTop: 2, letterSpacing: "0.1em" }}>{agent.strategy}</div>
+            {agent.mode === "live" && agent.cdp_address && (
+              <div style={{ marginTop: 4, display: "flex", alignItems: "center", gap: 6 }}>
+                <span style={{ fontSize: 8, color: "#ff2d92", letterSpacing: "0.12em", fontFamily: '"JetBrains Mono", monospace' }}>💳</span>
+                <span style={{ fontSize: 8, color: "#6a6a82", fontFamily: '"JetBrains Mono", monospace', letterSpacing: "0.05em" }}>
+                  {agent.cdp_address.slice(0, 8)}...{agent.cdp_address.slice(-6)}
+                </span>
+              </div>
+            )}
           </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -1275,23 +1285,7 @@ function AgentCard({ agent, onPause, onResume, onDelete, onInspect, onEditPolicy
         </span>
         <span>{deployedAgo < 1 ? "just now" : `${deployedAgo}m ago`}</span>
       </div>
-      {/* Live mode indicator + last tx link */}
-      {agent.mode === "live" && agent.last_tx_hash && (
-        <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6, fontSize: 9, fontFamily: '"JetBrains Mono", monospace' }}>
-          <span className="af-live-pulse" style={{ width: 6, height: 6, borderRadius: "50%", background: "#ff2d92", display: "inline-block" }} />
-          <span style={{ color: "#ff2d92", letterSpacing: "0.1em" }}>LIVE</span>
-          <a
-            href={`https://basescan.org/tx/${agent.last_tx_hash}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            style={{ color: "#6a6a82", textDecoration: "none", marginLeft: "auto" }}
-            onClick={e => e.stopPropagation()}
-          >
-            tx {agent.last_tx_hash.slice(0, 8)}...{agent.last_tx_hash.slice(-4)} ↗
-          </a>
-        </div>
-      )}
-      <div className="af-action-row" onClick={e => e.stopPropagation()}>
+      <div style={{ display: "flex", gap: 6, marginTop: 14, flexWrap: "wrap" }} onClick={e => e.stopPropagation()}>
         {agent.status === "halted" ? (
           // Halted agents (whether reached via manual halt or auto-halt) always
           // need an UNHALT path back to running. Shown regardless of mode.
@@ -1469,6 +1463,145 @@ function CreateAgentModal({ open, onClose, onDeploy, currentSlots, maxSlots, isA
 
 const inputStyle = (color) => ({ width: "100%", padding: "12px 14px", fontSize: 13, fontFamily: '"JetBrains Mono", monospace', background: "rgba(0,0,0,0.4)", color: "#dcdce5", border: `1px solid ${color}33`, outline: "none", boxSizing: "border-box", transition: "all 0.2s" });
 
+
+// ─── Agent Wallet Funding Panel ───────────────────────────────────────────────
+// Fetches the agent's CDP wallet address from /api/agents/:id/policy and
+// renders a self-contained deposit guide. Shown in the inspector drawer for
+// all agents — paper agents see a "not yet provisioned" state with explanation.
+function WalletFundingPanel({ agent, apiUrl }) {
+  const [cdpAddress, setCdpAddress]   = useState(null);
+  const [loading, setLoading]         = useState(true);
+  const [copied, setCopied]           = useState(false);
+  const [expanded, setExpanded]       = useState(agent.mode === "live");
+
+  useEffect(() => {
+    if (!agent || !apiUrl) return;
+    fetch(`${apiUrl}/api/agents/${agent.id}/policy`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        setCdpAddress(d?.policy?.cdp_account_address || null);
+        setLoading(false);
+      })
+      .catch(() => setLoading(false));
+  }, [agent, apiUrl]);
+
+  const copy = () => {
+    if (!cdpAddress) return;
+    navigator.clipboard.writeText(cdpAddress).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
+
+  const isLive       = agent.mode === "live";
+  const isProvisioned = !!cdpAddress;
+  const accentColor  = isLive ? "#ff2d92" : "#00ffee";
+
+  return (
+    <div style={{ marginBottom: 22, border: `1px solid ${accentColor}33`, background: "rgba(5,5,12,0.9)" }}>
+      {/* Header — always visible, click to expand */}
+      <div
+        onClick={() => setExpanded(e => !e)}
+        style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 14px", cursor: "pointer" }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span style={{ fontSize: 16 }}>💳</span>
+          <div>
+            <div style={{ fontSize: 10, letterSpacing: "0.2em", color: accentColor, fontFamily: '"JetBrains Mono", monospace', fontWeight: 700 }}>
+              AGENT_WALLET {isLive ? "· LIVE" : "· PAPER"}
+            </div>
+            <div style={{ fontSize: 9, color: "#6a6a82", fontFamily: '"JetBrains Mono", monospace', marginTop: 2 }}>
+              {loading ? "loading..." : isProvisioned ? cdpAddress.slice(0, 10) + "..." + cdpAddress.slice(-6) : "not provisioned"}
+            </div>
+          </div>
+        </div>
+        <span style={{ color: "#6a6a82", fontSize: 14 }}>{expanded ? "▲" : "▼"}</span>
+      </div>
+
+      {expanded && (
+        <div style={{ padding: "0 14px 14px", fontFamily: '"JetBrains Mono", monospace' }}>
+
+          {/* ── Not provisioned (paper agent, never gone live) ── */}
+          {!loading && !isProvisioned && (
+            <div>
+              <div style={{ padding: 12, background: "rgba(0,255,238,0.04)", border: "1px solid rgba(0,255,238,0.1)", fontSize: 10, color: "#6a6a82", lineHeight: 1.7 }}>
+                <div style={{ color: "#00ffee", fontWeight: 700, marginBottom: 6 }}>◈ PAPER MODE — NO WALLET NEEDED</div>
+                This agent runs simulated trades only. No real funds are used and no
+                on-chain wallet is provisioned yet.
+                <div style={{ marginTop: 10, color: "#dcdce5" }}>
+                  When you switch this agent to <strong style={{ color: "#ff2d92" }}>LIVE</strong> mode,
+                  a dedicated CDP wallet will be automatically created and its address will
+                  appear here.
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ── Provisioned wallet ── */}
+          {!loading && isProvisioned && (
+            <div>
+              {/* Address box */}
+              <div style={{ padding: 12, background: "rgba(0,0,0,0.5)", border: `1px solid ${accentColor}44`, marginBottom: 12 }}>
+                <div style={{ fontSize: 9, color: "#6a6a82", letterSpacing: "0.15em", marginBottom: 6 }}>DEPOSIT_ADDRESS · BASE_MAINNET</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 11, color: "#00ffee", wordBreak: "break-all", flex: 1 }}>{cdpAddress}</span>
+                  <button
+                    onClick={copy}
+                    style={{ padding: "6px 12px", background: copied ? "rgba(0,255,136,0.15)" : "rgba(0,255,238,0.1)", border: `1px solid ${copied ? "#00ff88" : "#00ffee"}`, color: copied ? "#00ff88" : "#00ffee", fontSize: 9, fontFamily: '"JetBrains Mono", monospace', cursor: "pointer", letterSpacing: "0.1em", whiteSpace: "nowrap", flexShrink: 0 }}
+                  >
+                    {copied ? "✓ COPIED" : "COPY"}
+                  </button>
+                </div>
+              </div>
+
+              {/* Basescan link */}
+              <a
+                href={`https://basescan.org/address/${cdpAddress}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ display: "block", marginBottom: 12, fontSize: 9, color: "#6a6a82", textDecoration: "none", letterSpacing: "0.1em" }}
+              >
+                ↗ VIEW ON BASESCAN
+              </a>
+
+              {/* Step-by-step deposit guide */}
+              <div style={{ fontSize: 9, color: "#6a6a82", letterSpacing: "0.12em", marginBottom: 8 }}>HOW_TO_DEPOSIT</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {[
+                  { n: "1", text: "Open your wallet (MetaMask, Coinbase Wallet, etc.)" },
+                  { n: "2", text: "Make sure you are on the Base network" },
+                  { n: "3", text: "Send USDC to the address above" },
+                  { n: "4", text: "Minimum recommended: match the agent's capital setting ($" + (agent.capital || 0) + ")" },
+                  { n: "5", text: "Resume the agent — it will begin trading within 2 minutes" },
+                ].map(step => (
+                  <div key={step.n} style={{ display: "flex", gap: 10, padding: "8px 10px", background: "rgba(0,0,0,0.3)", border: "1px solid #1a1a2e", alignItems: "flex-start" }}>
+                    <span style={{ color: accentColor, fontWeight: 700, fontSize: 11, flexShrink: 0, width: 14 }}>{step.n}</span>
+                    <span style={{ fontSize: 10, color: "#c0c0dc", lineHeight: 1.5 }}>{step.text}</span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Warning */}
+              <div style={{ marginTop: 12, padding: "10px 12px", background: "rgba(255,149,0,0.06)", border: "1px solid rgba(255,149,0,0.2)", fontSize: 9, color: "#ff9500", lineHeight: 1.6, letterSpacing: "0.05em" }}>
+                ⚠ SEND USDC ONLY — DO NOT SEND ETH OR OTHER TOKENS TO THIS ADDRESS.
+                This wallet is dedicated to this agent only. Funds cannot be shared
+                between agents.
+              </div>
+
+              {/* Network badge */}
+              <div style={{ marginTop: 10, display: "flex", gap: 8, alignItems: "center" }}>
+                <span style={{ padding: "3px 8px", background: "rgba(0,82,255,0.1)", border: "1px solid rgba(0,82,255,0.3)", color: "#6080ff", fontSize: 9, letterSpacing: "0.1em" }}>BASE MAINNET</span>
+                <span style={{ padding: "3px 8px", background: "rgba(0,255,136,0.06)", border: "1px solid rgba(0,255,136,0.15)", color: "#00ff88", fontSize: 9, letterSpacing: "0.1em" }}>USDC ONLY</span>
+                <span style={{ padding: "3px 8px", background: "rgba(0,0,0,0.3)", border: "1px solid #1a1a2e", color: "#6a6a82", fontSize: 9, letterSpacing: "0.1em" }}>CDP ISOLATED</span>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AgentDetailDrawer({ agent, open, onClose, apiUrl }) {
   const [logs, setLogs] = useState([]);
   useEffect(() => {
@@ -1488,8 +1621,8 @@ function AgentDetailDrawer({ agent, open, onClose, apiUrl }) {
   if (!open || !agent) return null;
   const logColors = { info: "#00ffee", scan: "#8a8a9e", signal: "#ff9500", action: "#a855ff", success: "#00ff88", error: "#ff2d92" };
   return (
-    <div className="af-drawer-overlay" style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 1000, backdropFilter: "blur(4px)", display: "flex", justifyContent: "flex-end" }} onClick={onClose}>
-      <div className="af-drawer-panel" style={{ width: "min(520px, 92vw)", height: "100vh", background: "#07070d", borderLeft: `1px solid ${agent.color}44`, padding: 26, overflowY: "auto", animation: "slide-in 0.25s ease-out", WebkitOverflowScrolling: "touch" }} onClick={e => e.stopPropagation()}>
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 1000, backdropFilter: "blur(4px)", display: "flex", justifyContent: "flex-end" }} onClick={onClose}>
+      <div style={{ width: "min(520px, 92vw)", height: "100vh", background: "#07070d", borderLeft: `1px solid ${agent.color}44`, padding: 26, overflowY: "auto", animation: "slide-in 0.25s ease-out" }} onClick={e => e.stopPropagation()}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 22 }}>
           <div>
             <div style={{ fontSize: 10, letterSpacing: "0.3em", color: agent.color, fontFamily: '"JetBrains Mono", monospace', marginBottom: 6, textShadow: `0 0 8px ${agent.color}` }}>[ AGENT_INSPECTOR ]</div>
@@ -1512,6 +1645,8 @@ function AgentDetailDrawer({ agent, open, onClose, apiUrl }) {
           <DetailBox label="TRADES" value={agent.trades_executed} color="#dcdce5" />
           <DetailBox label="PNL" value={fmtUsd(agent.pnl)} sub={fmtPct(agent.pnl_pct)} color={agent.pnl >= 0 ? "#00ff88" : "#ff2d92"} />
         </div>
+        <WalletFundingPanel agent={agent} apiUrl={apiUrl} />
+
         <div style={{ marginBottom: 22 }}>
           <div style={{ fontSize: 10, letterSpacing: "0.2em", color: "#6a6a82", fontFamily: '"JetBrains Mono", monospace', marginBottom: 10 }}>LIVE_CONFIG</div>
           <div style={{ padding: 14, background: "rgba(5,5,12,0.8)", border: "1px solid #1a1a2e", fontFamily: '"JetBrains Mono", monospace', fontSize: 11 }}>
@@ -1525,35 +1660,6 @@ function AgentDetailDrawer({ agent, open, onClose, apiUrl }) {
                 </div>
               ))
             )}
-          </div>
-        </div>
-        {/* Live trade history with on-chain links */}
-        <div style={{ marginBottom: 22 }}>
-          <div style={{ fontSize: 10, letterSpacing: "0.2em", color: "#6a6a82", fontFamily: '"JetBrains Mono", monospace', marginBottom: 10 }}>
-            RECENT_TRADES {agent.mode === "live" && <span style={{ color: "#ff2d92" }}>· LIVE</span>}
-          </div>
-          <div style={{ padding: 14, background: "rgba(5,5,12,0.8)", border: "1px solid #1a1a2e", fontFamily: '"JetBrains Mono", monospace', fontSize: 10, maxHeight: 200, overflowY: "auto", WebkitOverflowScrolling: "touch" }}>
-            {(!agent.trades || agent.trades.length === 0) ? (
-              <span style={{ color: "#6a6a82" }}>No trades recorded</span>
-            ) : agent.trades.slice(0, 10).map((t, i) => (
-              <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 0", borderBottom: i < Math.min(agent.trades.length, 10) - 1 ? "1px solid #1a1a2e" : "none", flexWrap: "wrap" }}>
-                <span style={{ color: t.side === "buy" ? "#00ff88" : "#ff2d92", fontWeight: 700, width: 30 }}>{(t.side || "—").toUpperCase()}</span>
-                <span style={{ color: "#dcdce5" }}>{t.asset_in || "?"} → {t.asset_out || "?"}</span>
-                {t.router_used && <span style={{ color: "#6a6a82", fontSize: 9 }}>via {t.router_used}</span>}
-                <span style={{ marginLeft: "auto", color: "#6a6a82", fontSize: 9 }}>{t.mode === "live" ? "🔴" : "📄"}</span>
-                {t.tx_hash && (
-                  <a
-                    href={`https://basescan.org/tx/${t.tx_hash}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    style={{ color: agent.color, textDecoration: "none", fontSize: 9 }}
-                    onClick={e => e.stopPropagation()}
-                  >
-                    {t.tx_hash.slice(0, 8)}... ↗
-                  </a>
-                )}
-              </div>
-            ))}
           </div>
         </div>
         <div>
@@ -1845,186 +1951,25 @@ export default function AgentForge({ apiUrl }) {
   const tierMeta = TIER_META[subscription.tier] || TIER_META[0];
 
   return (
-    <div className="af-root" style={{ minHeight: "calc(100vh - 60px)", background: `radial-gradient(ellipse at top left, rgba(0,255,238,0.04), transparent 50%), radial-gradient(ellipse at bottom right, rgba(255,45,146,0.04), transparent 50%), #04040a`, padding: "20px 24px", color: "#dcdce5" }}>
+    <div style={{ minHeight: "calc(100vh - 60px)", background: `radial-gradient(ellipse at top left, rgba(0,255,238,0.04), transparent 50%), radial-gradient(ellipse at bottom right, rgba(255,45,146,0.04), transparent 50%), #04040a`, padding: "20px 24px", color: "#dcdce5" }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;900&display=swap');
         @keyframes pulse-ring { 0% { transform: scale(0.8); opacity: 0.8; } 100% { transform: scale(2); opacity: 0; } }
         @keyframes slide-in { from { transform: translateX(100%); } to { transform: translateX(0); } }
-        @keyframes slide-up { from { transform: translateY(100%); } to { transform: translateY(0); } }
-        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-
-        /* ─── Mobile-first responsive layer ─────────────────────── */
-        *, *::before, *::after { box-sizing: border-box; }
-
-        /* Safe area for notched phones */
-        .af-root {
-          padding-bottom: env(safe-area-inset-bottom, 0px) !important;
-        }
-
-        /* Card grid — stack on mobile */
-        @media (max-width: 480px) {
-          .af-card-grid {
-            grid-template-columns: 1fr !important;
-            gap: 10px !important;
-          }
-          .af-root {
-            padding: 12px 10px !important;
-          }
-          .af-hero-stats {
-            flex-direction: column !important;
-            gap: 10px !important;
-          }
-          .af-section-header {
-            flex-direction: column !important;
-            align-items: flex-start !important;
-            gap: 8px !important;
-          }
-          .af-section-controls {
-            width: 100% !important;
-            justify-content: space-between !important;
-          }
-        }
-
-        /* Drawer — bottom sheet on mobile, side panel on desktop */
-        @media (max-width: 640px) {
-          .af-drawer-overlay {
-            align-items: flex-end !important;
-            justify-content: center !important;
-          }
-          .af-drawer-panel {
-            width: 100% !important;
-            height: 85vh !important;
-            max-height: 85vh !important;
-            border-left: none !important;
-            border-top: 1px solid rgba(0,255,238,0.2) !important;
-            border-radius: 16px 16px 0 0 !important;
-            animation: slide-up 0.25s ease-out !important;
-          }
-          .af-drawer-panel::before {
-            content: '';
-            display: block;
-            width: 36px;
-            height: 4px;
-            background: #333;
-            border-radius: 2px;
-            margin: 0 auto 16px;
-          }
-        }
-
-        /* Modals — full screen on mobile */
-        @media (max-width: 640px) {
-          .af-modal-content {
-            width: 100% !important;
-            max-width: 100% !important;
-            max-height: 100vh !important;
-            height: 100vh !important;
-            border-radius: 0 !important;
-            margin: 0 !important;
-          }
-          .af-modal-overlay {
-            padding: 0 !important;
-          }
-        }
-
-        /* Button row — wrap on mobile */
-        .af-action-row {
-          display: flex;
-          gap: 6px;
-          margin-top: 14px;
-          flex-wrap: wrap;
-        }
-        @media (max-width: 480px) {
-          .af-action-row > * {
-            flex: 1 1 calc(50% - 3px) !important;
-            min-width: calc(50% - 3px) !important;
-          }
-        }
-
-        /* Touch targets — minimum 44px on mobile */
-        @media (max-width: 640px) {
-          button, a[role="button"], [role="button"] {
-            min-height: 44px !important;
-          }
-          .af-range-btn {
-            min-width: 44px !important;
-            min-height: 36px !important;
-          }
-        }
-
-        /* Donut chart — scale down on mobile */
-        @media (max-width: 480px) {
-          .af-donut-wrap {
-            flex-direction: column !important;
-            align-items: center !important;
-          }
-        }
-
-        /* Subscription card — stack on mobile */
-        @media (max-width: 480px) {
-          .af-sub-card {
-            flex-direction: column !important;
-            gap: 10px !important;
-          }
-          .af-sub-badges {
-            flex-wrap: wrap !important;
-            gap: 6px !important;
-          }
-        }
-
-        /* Policy modal tabs — scroll horizontal on mobile */
-        @media (max-width: 480px) {
-          .af-policy-tabs {
-            overflow-x: auto !important;
-            -webkit-overflow-scrolling: touch !important;
-            gap: 4px !important;
-          }
-          .af-policy-tabs > * {
-            white-space: nowrap !important;
-            flex-shrink: 0 !important;
-          }
-        }
-
-        /* Create agent modal — template grid */
-        @media (max-width: 480px) {
-          .af-template-grid {
-            grid-template-columns: 1fr !important;
-          }
-        }
-
-        /* Metric values — scale text on mobile */
-        @media (max-width: 380px) {
-          .af-metric-value {
-            font-size: 14px !important;
-          }
-          .af-metric-label {
-            font-size: 8px !important;
-          }
-        }
-
-        /* Live mode indicator pulse */
-        .af-live-pulse {
-          animation: pulse-ring 2s infinite;
-        }
-
-        /* Scrollbar styling */
-        ::-webkit-scrollbar { width: 4px; height: 4px; }
-        ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: #333; border-radius: 2px; }
-        ::-webkit-scrollbar-thumb:hover { background: #555; }
       `}</style>
 
       <HeroStats subscription={subscription} agents={agents} />
       <AllocationDonut agents={agents} />
       <SubscriptionCard subscription={subscription} isAllowlisted={isAllowlisted} onUpgrade={handleUpgrade} />
 
-      <div className="af-section-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 12 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 12 }}>
         <div>
           <h2 style={{ fontSize: 14, fontWeight: 700, margin: 0, fontFamily: '"JetBrains Mono", monospace', letterSpacing: "0.05em" }}>DEPLOYED_AGENTS</h2>
           <div style={{ fontSize: 10, color: "#6a6a82", fontFamily: '"JetBrains Mono", monospace', marginTop: 2, letterSpacing: "0.1em" }}>
             {agents.length} total · {Math.max(0, subscription.agentsAllowed - agents.length)} slots remaining
           </div>
         </div>
-        <div className="af-section-controls" style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
           {agents.length > 0 && <RangePicker range={range} onChange={setRange} />}
           <GlowButton onClick={() => setCreateOpen(true)} color="#00ffee" size="md" disabled={!isConnected || agents.length >= tierMeta.allowed}>
             {!isConnected ? "CONNECT WALLET" : "+ DEPLOY AGENT"}
@@ -2043,7 +1988,7 @@ export default function AgentForge({ apiUrl }) {
           {isConnected && <GlowButton onClick={() => setCreateOpen(true)} color="#00ffee" size="lg">⚡ FORGE FIRST AGENT</GlowButton>}
         </div>
       ) : (
-        <div className="af-card-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(340px, 1fr))", gap: 12 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(360px, 1fr))", gap: 12 }}>
           {agents.map(agent => (
             <AgentCard
               key={agent.id}
