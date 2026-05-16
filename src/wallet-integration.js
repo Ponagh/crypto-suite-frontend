@@ -10,7 +10,7 @@
  *
  * ── Contract Addresses (Base Mainnet) — ALL LIVE ───────────────
  *   BaseAlphaSubscription : 0xbB0740BDcB1927bdDC37f07f8a9B3291d35e1139
- *   YieldPilotVault       : 0x8d0420fe81C3499D414ac3dEB2f37E8F5297df9F
+ *   YieldPilotVault       : 0x671025e627244D92FdF13A30A2Ad42fDfedeD0f6
  *   AgentForgeRegistry    : 0xa67421E8d9119247708c4474BE3Dc76567fC618f
  */
 
@@ -22,7 +22,7 @@ import { ethers } from "ethers";
 // ─────────────────────────────────────────────────────────────
 export const CONTRACTS = {
   BaseAlphaSubscription: "0xbB0740BDcB1927bdDC37f07f8a9B3291d35e1139",
-  YieldPilotVault:       "0x8d0420fe81C3499D414ac3dEB2f37E8F5297df9F",
+  YieldPilotVault:       "0x671025e627244D92FdF13A30A2Ad42fDfedeD0f6",
   AgentForgeRegistry:    "0xa67421E8d9119247708c4474BE3Dc76567fC618f",
 };
 
