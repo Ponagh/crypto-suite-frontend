@@ -8,7 +8,7 @@ import { useWallet, useVaultDeposit } from "./wallet-integration";
  * ═══════════════════════════════════════════════════════════════════════════════
  */
 
-const YIELD_PILOT_VAULT = "0x8d0420fe81C3499D414ac3dEB2f37E8F5297df9F";
+const YIELD_PILOT_VAULT = "0x671025e627244D92FdF13A30A2Ad42fDfedeD0f6"; // V2 UUPS proxy
 const USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 
 // RPC fallback list — try each in order
@@ -19,12 +19,17 @@ const RPC_URLS = [
   "https://mainnet.base.org",
 ];
 
+// YieldPilotVaultV2 — ERC4626 UUPS upgradeable
 const VAULT_ABI = [
+  "function deposit(uint256 assets, address receiver) returns (uint256 shares)",
+  "function withdraw(uint256 assets, address receiver, address owner) returns (uint256 assets)",
   "function totalAssets() view returns (uint256)",
-  "function totalShares() view returns (uint256)",
-  "function totalDeposits() view returns (uint256)",
-  "function sharePrice() view returns (uint256)",
-  "function positions(address) view returns (uint256 deposited, uint256 shares, uint256 depositTimestamp)",
+  "function totalSupply() view returns (uint256)",
+  "function balanceOf(address) view returns (uint256)",
+  "function convertToAssets(uint256 shares) view returns (uint256)",
+  "function convertToShares(uint256 assets) view returns (uint256)",
+  "function totalDeployed() view returns (uint256)",
+  "function getLiquidUSDC() view returns (uint256)",
   "function paused() view returns (bool)",
 ];
 
@@ -67,7 +72,7 @@ async function getWorkingProvider() {
 }
 
 // ─── UI atoms ────────────────────────────────────────────────────────────────
-function MiniChart({ data, color = "#00ff88", width = 80, height = 28 }) {
+function MiniChart({ data, color = "#00dc82", width = 80, height = 28 }) {
   const d = (data || []).map(num);
   if (d.length < 2) return <div style={{ width, height }} />;
   const max = Math.max(...d);
@@ -87,14 +92,14 @@ function MiniChart({ data, color = "#00ff88", width = 80, height = 28 }) {
 
 function RiskBadge({ level }) {
   const map = {
-    Low:    { color: "#00ff88", bg: "rgba(0,255,136,0.08)" },
+    Low:    { color: "#00dc82", bg: "rgba(0,220,130,0.12)" },
     Medium: { color: "#ffaa00", bg: "rgba(255,170,0,0.12)" },
-    High:   { color: "#ff2d92", bg: "rgba(255,45,146,0.1)" },
+    High:   { color: "#ff4466", bg: "rgba(255,68,102,0.12)" },
   };
   const c = map[level] || map.Low;
   return (
     <span style={{
-      padding: "2px 8px", fontSize: 9, fontFamily: '"JetBrains Mono", monospace',
+      padding: "2px 8px", fontSize: 9, fontFamily: "monospace",
       fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase",
       color: c.color, background: c.bg, borderRadius: 3,
     }}>{level}</span>
@@ -105,7 +110,7 @@ function Spinner({ size = 14 }) {
   return (
     <div style={{
       width: size, height: size, border: "2px solid #1a1a2e",
-      borderTopColor: "#00ffee", borderRadius: "50%",
+      borderTopColor: "#3366ff", borderRadius: "50%",
       animation: "spin 0.8s linear infinite", display: "inline-block",
     }} />
   );
@@ -130,26 +135,26 @@ function DepositModal({ open, onClose, userUsdcBalance, userPosition, pricePerSh
 
   return (
     <div style={{
-      position: "fixed", inset: 0, background: "rgba(4,4,10,0.92)",
+      position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)",
       display: "flex", alignItems: "center", justifyContent: "center",
       zIndex: 1000, backdropFilter: "blur(6px)",
     }} onClick={onClose}>
       <div style={{
-        width: 420, padding: 24, background: "#08080f",
+        width: 420, padding: 24, background: "#0d0d16",
         border: "1px solid #1a1a2e", borderRadius: 12,
       }} onClick={e => e.stopPropagation()}>
-        <div style={{ display: "flex", gap: 4, marginBottom: 20, padding: 3, background: "#04040a", borderRadius: 6 }}>
+        <div style={{ display: "flex", gap: 4, marginBottom: 20, padding: 3, background: "#06060b", borderRadius: 6 }}>
           {["deposit", "withdraw"].map(m => (
             <button key={m} onClick={() => { setMode(m); setAmount(""); }} style={{
               flex: 1, padding: "8px 12px", fontSize: 11, fontWeight: 600,
-              fontFamily: '"JetBrains Mono", monospace', letterSpacing: "0.06em", textTransform: "uppercase",
-              background: mode === m ? "#00ffee" : "transparent",
+              fontFamily: "monospace", letterSpacing: "0.06em", textTransform: "uppercase",
+              background: mode === m ? "#3366ff" : "transparent",
               color: mode === m ? "#fff" : "#6a6a82",
               border: "none", borderRadius: 4, cursor: "pointer",
             }}>{m}</button>
           ))}
         </div>
-        <div style={{ marginBottom: 14, fontSize: 10, color: "#6a6a82", fontFamily: '"JetBrains Mono", monospace', letterSpacing: "0.08em" }}>
+        <div style={{ marginBottom: 14, fontSize: 10, color: "#6a6a82", fontFamily: "monospace", letterSpacing: "0.08em" }}>
           {mode === "deposit" ? "AMOUNT (USDC)" : "SHARES TO WITHDRAW"}
         </div>
         <div style={{ position: "relative", marginBottom: 8 }}>
@@ -157,20 +162,20 @@ function DepositModal({ open, onClose, userUsdcBalance, userPosition, pricePerSh
             placeholder="0.00"
             style={{
               width: "100%", padding: "14px 70px 14px 14px", fontSize: 20,
-              fontFamily: '"JetBrains Mono", monospace', fontWeight: 600,
-              background: "#04040a", color: "#dcdce5",
+              fontFamily: "monospace", fontWeight: 600,
+              background: "#06060b", color: "#dcdce5",
               border: "1px solid #1a1a2e", borderRadius: 6, boxSizing: "border-box",
             }} />
           <button
             onClick={() => setAmount(mode === "deposit" ? userUsdc.toFixed(2) : userShares.toFixed(4))}
             style={{
               position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)",
-              padding: "4px 10px", fontSize: 9, fontFamily: '"JetBrains Mono", monospace', fontWeight: 700,
-              background: "rgba(0,255,238,0.08)", color: "#00ffee",
-              border: "1px solid rgba(0,255,238,0.25)", borderRadius: 4, cursor: "pointer",
+              padding: "4px 10px", fontSize: 9, fontFamily: "monospace", fontWeight: 700,
+              background: "rgba(51,102,255,0.12)", color: "#3366ff",
+              border: "1px solid rgba(51,102,255,0.3)", borderRadius: 4, cursor: "pointer",
             }}>MAX</button>
         </div>
-        <div style={{ fontSize: 10, color: "#6a6a82", fontFamily: '"JetBrains Mono", monospace', marginBottom: 18 }}>
+        <div style={{ fontSize: 10, color: "#6a6a82", fontFamily: "monospace", marginBottom: 18 }}>
           {mode === "deposit"
             ? `Wallet balance: ${userUsdc.toFixed(2)} USDC`
             : `Your shares: ${userShares.toFixed(4)}  ·  Value: ${fmtUsd(userValue)}`}
@@ -178,17 +183,17 @@ function DepositModal({ open, onClose, userUsdcBalance, userPosition, pricePerSh
         {txStatus && (
           <div style={{
             padding: "8px 12px", marginBottom: 14, borderRadius: 6,
-            background: txStatus.type === "error" ? "rgba(255,45,146,0.1)" :
-                        txStatus.type === "success" ? "rgba(0,255,136,0.08)" : "rgba(255,170,0,0.12)",
-            color: txStatus.type === "error" ? "#ff2d92" :
-                   txStatus.type === "success" ? "#00ff88" : "#ffaa00",
-            fontSize: 10, fontFamily: '"JetBrains Mono", monospace', wordBreak: "break-all",
+            background: txStatus.type === "error" ? "rgba(255,68,102,0.12)" :
+                        txStatus.type === "success" ? "rgba(0,220,130,0.12)" : "rgba(255,170,0,0.12)",
+            color: txStatus.type === "error" ? "#ff4466" :
+                   txStatus.type === "success" ? "#00dc82" : "#ffaa00",
+            fontSize: 10, fontFamily: "monospace", wordBreak: "break-all",
           }}>{txStatus.message}</div>
         )}
         <button onClick={handleSubmit} disabled={!amount || parseFloat(amount) <= 0 || txStatus?.type === "pending"} style={{
           width: "100%", padding: "12px 0", fontSize: 12, fontWeight: 700,
-          fontFamily: '"JetBrains Mono", monospace', letterSpacing: "0.08em", textTransform: "uppercase",
-          background: mode === "deposit" ? "#00ffee" : "#ff2d92",
+          fontFamily: "monospace", letterSpacing: "0.08em", textTransform: "uppercase",
+          background: mode === "deposit" ? "#3366ff" : "#ff4466",
           color: "#fff", border: "none", borderRadius: 6, cursor: "pointer",
           opacity: !amount || parseFloat(amount) <= 0 || txStatus?.type === "pending" ? 0.4 : 1,
         }}>
@@ -197,7 +202,7 @@ function DepositModal({ open, onClose, userUsdcBalance, userPosition, pricePerSh
         </button>
         <button onClick={onClose} style={{
           width: "100%", marginTop: 8, padding: "10px 0", fontSize: 10,
-          fontFamily: '"JetBrains Mono", monospace', background: "transparent", color: "#6a6a82",
+          fontFamily: "monospace", background: "transparent", color: "#6a6a82",
           border: "1px solid #1a1a2e", borderRadius: 6, cursor: "pointer",
           letterSpacing: "0.08em", textTransform: "uppercase",
         }}>Cancel</button>
@@ -229,44 +234,44 @@ export default function YieldPilot({ apiUrl }) {
       const rpc = await getWorkingProvider();
       const vault = new ethers.Contract(YIELD_PILOT_VAULT, VAULT_ABI, rpc);
 
-      // Use individual tries — if totalShares is 0, sharePrice reverts (div by zero)
-      // so handle it gracefully
-      const [totalAssetsRaw, totalSharesRaw, totalDepositedRaw, pausedRaw] =
+      // V2: ERC4626 — totalSupply() for shares, convertToAssets() for price per share
+      const [totalAssetsRaw, totalSharesRaw, totalDeployedRaw, liquidUSDCRaw, pausedRaw] =
         await Promise.all([
           vault.totalAssets().catch(() => 0n),
-          vault.totalShares().catch(() => 0n),
-          vault.totalDeposits().catch(() => 0n),
+          vault.totalSupply().catch(() => 0n),
+          vault.totalDeployed().catch(() => 0n),
+          vault.getLiquidUSDC().catch(() => 0n),
           vault.paused().catch(() => false),
         ]);
 
-      // Only call sharePrice if vault has shares
-      let sharePriceRaw = 1000000000000000000n; // 1e18 default (sharePrice is 1e18-scaled per contract)
+      // Price per share via ERC4626 convertToAssets (returns USDC, 6 decimals)
+      let sharePriceRaw = 1000000n; // 1 USDC default
       if (totalSharesRaw > 0n) {
-        try {
-          sharePriceRaw = await vault.sharePrice();
-        } catch {
-          // fallback to 1.0
-        }
+        sharePriceRaw = await vault.convertToAssets(1000000n).catch(() => sharePriceRaw);
       }
 
       setVaultStats({
-        totalAssets: Number(ethers.formatUnits(totalAssetsRaw, 6)),
-        totalShares: Number(ethers.formatUnits(totalSharesRaw, 6)),       // shares scale 1:1 with USDC (6dp)
-        totalDeposited: Number(ethers.formatUnits(totalDepositedRaw, 6)),
-        pricePerShare: Number(ethers.formatUnits(sharePriceRaw, 18)),     // sharePrice is 1e18-scaled
+        totalAssets:   Number(ethers.formatUnits(totalAssetsRaw, 6)),
+        totalShares:   Number(ethers.formatUnits(totalSharesRaw, 6)),
+        totalDeployed: Number(ethers.formatUnits(totalDeployedRaw, 6)),
+        liquidUSDC:    Number(ethers.formatUnits(liquidUSDCRaw, 6)),
+        pricePerShare: Number(ethers.formatUnits(sharePriceRaw, 6)),  // V2: 6 decimals
         paused: pausedRaw,
-        performanceFeePercent: 0.5,                                        // PERFORMANCE_FEE_BPS = 50 = 0.5%
+        performanceFeePercent: 0.5,
         isEmpty: totalSharesRaw === 0n,
       });
 
       if (address) {
         try {
-          // positions() returns (deposited, shares, depositTimestamp) — NOT (shares, deposited, timestamp)
-          const pos = await vault.positions(address);
+          // V2: ERC4626 — balanceOf(shares) + convertToAssets for current USDC value
+          const sharesRaw = await vault.balanceOf(address).catch(() => 0n);
+          const valueRaw  = sharesRaw > 0n
+            ? await vault.convertToAssets(sharesRaw).catch(() => sharesRaw)
+            : 0n;
           setUserPosition({
-            shares: Number(ethers.formatUnits(pos[1], 6)),            // shares at index 1, 6 decimals
-            depositedAmount: Number(ethers.formatUnits(pos[0], 6)),   // deposited at index 0
-            depositedAt: Number(pos[2]),                              // timestamp at index 2
+            shares:          Number(ethers.formatUnits(sharesRaw, 6)),
+            depositedAmount: Number(ethers.formatUnits(valueRaw, 6)),
+            depositedAt:     0,
           });
         } catch {
           setUserPosition({ shares: 0, depositedAmount: 0, depositedAt: 0 });
@@ -284,7 +289,7 @@ export default function YieldPilot({ apiUrl }) {
       setError(`RPC unreachable — pools still load from backend cache`);
       // Set empty defaults so UI still renders
       setVaultStats({
-        totalAssets: 0, totalShares: 0, totalDeposited: 0,
+        totalAssets: 0, totalShares: 0, totalDeployed: 0, liquidUSDC: 0,
         pricePerShare: 1, paused: false, performanceFeePercent: 0.5, isEmpty: true,
       });
     } finally {
@@ -378,32 +383,31 @@ export default function YieldPilot({ apiUrl }) {
     normalizedPools[0];
 
   return (
-    <div style={{ minHeight: "calc(100vh - 60px)", background: "#04040a", color: "#dcdce5", padding: "20px 24px" }}>
+    <div className="app-page" style={{ padding: "20px 24px" }}>
       <div className="app-header" style={{ marginBottom: 24 }}>
         <div className="app-title" style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <div style={{
             width: 36, height: 36, borderRadius: 8,
-            background: "rgba(0,255,136,0.08)",
+            background: "rgba(0,220,130,0.12)",
             display: "flex", alignItems: "center", justifyContent: "center",
             fontSize: 18,
           }}>📊</div>
           <div>
-            <h1 style={{ fontSize: 18, fontWeight: 900, margin: 0, fontFamily: '"JetBrains Mono", monospace', letterSpacing: "0.05em", color: "#00ffee" }}>YIELDPILOT</h1>
+            <h1 style={{ fontSize: 18, fontWeight: 700, margin: 0 }}>YieldPilot</h1>
             <p style={{ fontSize: 11, color: "#6a6a82", margin: 0 }}>
               USDC Vault · Live on Base Mainnet
-              {vaultStats?.paused && <span style={{ color: "#ff2d92", marginLeft: 8 }}>⚠ PAUSED</span>}
+              {vaultStats?.paused && <span style={{ color: "#ff4466", marginLeft: 8 }}>⚠ PAUSED</span>}
               {vaultStats?.isEmpty && <span style={{ color: "#ffaa00", marginLeft: 8 }}>· Empty vault — be first to deposit</span>}
             </p>
           </div>
         </div>
       </div>
 
-      <style>{`@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;900&display=swap');`}</style>
       {error && (
         <div style={{
           padding: "10px 14px", marginBottom: 14, borderRadius: 6,
           background: "rgba(255,170,0,0.10)", border: "1px solid rgba(255,170,0,0.22)",
-          color: "#ffaa00", fontSize: 11, fontFamily: '"JetBrains Mono", monospace',
+          color: "#ffaa00", fontSize: 11, fontFamily: "monospace",
           display: "flex", justifyContent: "space-between",
         }}>
           <span>{error}</span>
@@ -421,7 +425,7 @@ export default function YieldPilot({ apiUrl }) {
         ) : (
           <>
             <StatCard label="VAULT TVL" value={fmtCompact(vaultStats?.totalAssets)}
-              sub={`${num(vaultStats?.totalShares).toFixed(2)} shares`} color="#00ffee" />
+              sub={`${num(vaultStats?.totalShares).toFixed(2)} shares`} color="#3366ff" />
             <StatCard label="YOUR DEPOSIT"
               value={isConnected ? fmtUsd(userPosition?.depositedAmount) : "—"}
               sub={isConnected ? `${num(userPosition?.shares).toFixed(4)} shares` : "connect wallet"}
@@ -429,7 +433,7 @@ export default function YieldPilot({ apiUrl }) {
             <StatCard label="YOUR VALUE"
               value={isConnected ? fmtUsd(userValueUsd) : "—"}
               sub={isConnected && userEarnings !== 0 ? `${userEarnings >= 0 ? "+" : ""}${fmtUsd(userEarnings)}` : ""}
-              color={userEarnings >= 0 ? "#00ff88" : "#ff2d92"} />
+              color={userEarnings >= 0 ? "#00dc82" : "#ff4466"} />
             <StatCard label="PRICE PER SHARE"
               value={num(vaultStats?.pricePerShare).toFixed(6)}
               sub={`${num(vaultStats?.performanceFeePercent)}% perf fee`}
@@ -439,22 +443,22 @@ export default function YieldPilot({ apiUrl }) {
       </div>
 
       <div style={{
-        padding: 20, marginBottom: 24, borderRadius: 8,
-        background: "linear-gradient(135deg, rgba(0,255,238,0.06), rgba(139,92,246,0.08))",
-        border: "1px solid rgba(0,255,238,0.2)",
+        padding: 20, marginBottom: 24, borderRadius: 10,
+        background: "linear-gradient(135deg, rgba(51,102,255,0.08), rgba(139,92,246,0.08))",
+        border: "1px solid rgba(51,102,255,0.22)",
       }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 14 }}>
           <div>
             <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 4 }}>YieldPilot Vault</div>
-            <div style={{ fontSize: 11, color: "#6a6a82", fontFamily: '"JetBrains Mono", monospace' }}>
+            <div style={{ fontSize: 11, color: "#6a6a82", fontFamily: "monospace" }}>
               {YIELD_PILOT_VAULT.slice(0, 10)}···{YIELD_PILOT_VAULT.slice(-8)}
             </div>
           </div>
           {isConnected ? (
             <button onClick={() => setModalOpen(true)} disabled={vaultStats?.paused} style={{
               padding: "10px 20px", fontSize: 11, fontWeight: 700,
-              fontFamily: '"JetBrains Mono", monospace', letterSpacing: "0.08em",
-              background: vaultStats?.paused ? "#1a1a2e" : "#00ffee",
+              fontFamily: "monospace", letterSpacing: "0.08em",
+              background: vaultStats?.paused ? "#1a1a2e" : "#3366ff",
               color: vaultStats?.paused ? "#6a6a82" : "#fff",
               border: "none", borderRadius: 6,
               cursor: vaultStats?.paused ? "not-allowed" : "pointer",
@@ -462,7 +466,7 @@ export default function YieldPilot({ apiUrl }) {
               {vaultStats?.paused ? "VAULT PAUSED" : "DEPOSIT / WITHDRAW"}
             </button>
           ) : (
-            <div style={{ fontSize: 11, color: "#6a6a82", fontFamily: '"JetBrains Mono", monospace' }}>
+            <div style={{ fontSize: 11, color: "#6a6a82", fontFamily: "monospace" }}>
               Connect wallet to deposit
             </div>
           )}
@@ -471,8 +475,8 @@ export default function YieldPilot({ apiUrl }) {
 
       {aiPick && (
         <div style={{
-          padding: 20, marginBottom: 24, borderRadius: 8,
-          background: "#08080f", border: "1px solid rgba(0,255,136,0.2)",
+          padding: 20, marginBottom: 24, borderRadius: 10,
+          background: "#0d0d16", border: "1px solid rgba(0,220,130,0.22)",
         }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
             <span style={{ fontSize: 20 }}>🧠</span>
@@ -487,7 +491,7 @@ export default function YieldPilot({ apiUrl }) {
             <span style={{ fontSize: 11, color: "#6a6a82" }}>{aiPick.strategy}</span>
           </div>
           <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
-            <span style={{ fontFamily: '"JetBrains Mono", monospace', fontSize: 28, fontWeight: 700, color: "#00ff88" }}>
+            <span style={{ fontFamily: "monospace", fontSize: 28, fontWeight: 700, color: "#00dc82" }}>
               {fmtPct(aiPick.apy)}
             </span>
             <span style={{ fontSize: 11, color: "#6a6a82" }}>APY</span>
@@ -509,11 +513,11 @@ export default function YieldPilot({ apiUrl }) {
         <div style={{ display: "flex", gap: 4 }}>
           {[{ key: "apy", label: "APY" }, { key: "tvl", label: "TVL" }, { key: "risk", label: "RISK" }].map(s => (
             <button key={s.key} onClick={() => setSortBy(s.key)} style={{
-              padding: "5px 10px", fontSize: 9, fontFamily: '"JetBrains Mono", monospace', fontWeight: 600,
+              padding: "5px 10px", fontSize: 9, fontFamily: "monospace", fontWeight: 600,
               letterSpacing: "0.08em",
-              background: sortBy === s.key ? "rgba(0,255,238,0.08)" : "transparent",
-              color: sortBy === s.key ? "#00ffee" : "#6a6a82",
-              border: `1px solid ${sortBy === s.key ? "rgba(0,255,238,0.25)" : "#1a1a2e"}`,
+              background: sortBy === s.key ? "rgba(51,102,255,0.12)" : "transparent",
+              color: sortBy === s.key ? "#3366ff" : "#6a6a82",
+              border: `1px solid ${sortBy === s.key ? "rgba(51,102,255,0.3)" : "#1a1a2e"}`,
               borderRadius: 4, cursor: "pointer",
             }}>{s.label}</button>
           ))}
@@ -523,11 +527,11 @@ export default function YieldPilot({ apiUrl }) {
       <div style={{ display: "flex", gap: 4, marginBottom: 14 }}>
         {["all", "Low", "Medium", "High"].map(r => (
           <button key={r} onClick={() => setRiskFilter(r)} style={{
-            padding: "5px 10px", fontSize: 9, fontFamily: '"JetBrains Mono", monospace', fontWeight: 600,
+            padding: "5px 10px", fontSize: 9, fontFamily: "monospace", fontWeight: 600,
             letterSpacing: "0.08em",
-            background: riskFilter === r ? "rgba(0,255,238,0.08)" : "transparent",
-            color: riskFilter === r ? "#00ffee" : "#6a6a82",
-            border: `1px solid ${riskFilter === r ? "rgba(0,255,238,0.25)" : "#1a1a2e"}`,
+            background: riskFilter === r ? "rgba(51,102,255,0.12)" : "transparent",
+            color: riskFilter === r ? "#3366ff" : "#6a6a82",
+            border: `1px solid ${riskFilter === r ? "rgba(51,102,255,0.3)" : "#1a1a2e"}`,
             borderRadius: 4, cursor: "pointer",
           }}>{r === "all" ? "ALL" : r.toUpperCase()}</button>
         ))}
@@ -536,14 +540,14 @@ export default function YieldPilot({ apiUrl }) {
       {poolsLoading ? (
         <div style={{ display: "flex", justifyContent: "center", padding: 40 }}><Spinner size={24} /></div>
       ) : filteredPools.length === 0 ? (
-        <div style={{ padding: 40, textAlign: "center", color: "#6a6a82", fontSize: 11, fontFamily: '"JetBrains Mono", monospace' }}>
+        <div style={{ padding: 40, textAlign: "center", color: "#6a6a82", fontSize: 11, fontFamily: "monospace" }}>
           No pools yet. Backend will populate within ~10 minutes.
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           {filteredPools.map(pool => (
             <div key={pool.id} style={{
-              padding: "14px 16px", background: "#08080f",
+              padding: "14px 16px", background: "#0d0d16",
               border: "1px solid #1a1a2e", borderRadius: 8,
             }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
@@ -557,7 +561,7 @@ export default function YieldPilot({ apiUrl }) {
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                   <MiniChart
                     data={pool.trend || [pool.apy, pool.apy, pool.apy, pool.apy, pool.apy, pool.apy]}
-                    color={pool.risk === "High" ? "#ff2d92" : pool.risk === "Medium" ? "#ffaa00" : "#00ff88"}
+                    color={pool.risk === "High" ? "#ff4466" : pool.risk === "Medium" ? "#ffaa00" : "#00dc82"}
                   />
                   <RiskBadge level={pool.risk} />
                 </div>
@@ -565,7 +569,7 @@ export default function YieldPilot({ apiUrl }) {
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <div style={{ display: "flex", gap: 20, flexWrap: "wrap" }}>
                   <div>
-                    <span style={{ fontFamily: '"JetBrains Mono", monospace', fontSize: 18, fontWeight: 700, color: "#00ff88" }}>
+                    <span style={{ fontFamily: "monospace", fontSize: 18, fontWeight: 700, color: "#00dc82" }}>
                       {fmtPct(pool.apy)}
                     </span>
                     <span style={{ fontSize: 10, color: "#6a6a82", marginLeft: 4 }}>APY</span>
@@ -573,12 +577,12 @@ export default function YieldPilot({ apiUrl }) {
                   <div style={{ fontSize: 10, color: "#6a6a82", display: "flex", gap: 14, alignItems: "center" }}>
                     <span>TVL: {fmtCompact(pool.tvl_usd)}</span>
                     <span>{pool.strategy}</span>
-                    {pool.bonus && <span style={{ color: "#00ffee" }}>{pool.bonus}</span>}
+                    {pool.bonus && <span style={{ color: "#3366ff" }}>{pool.bonus}</span>}
                   </div>
                 </div>
                 <span style={{
-                  padding: "4px 8px", fontSize: 9, fontFamily: '"JetBrains Mono", monospace', fontWeight: 600,
-                  color: "#6a6a82", background: "#04040a", border: "1px solid #1a1a2e",
+                  padding: "4px 8px", fontSize: 9, fontFamily: "monospace", fontWeight: 600,
+                  color: "#6a6a82", background: "#06060b", border: "1px solid #1a1a2e",
                   borderRadius: 4, letterSpacing: "0.06em",
                 }}>
                   {pool.audited ? "✓ AUDITED" : "UNAUDITED"}
@@ -607,17 +611,17 @@ export default function YieldPilot({ apiUrl }) {
 function StatCard({ label, value, sub, color }) {
   return (
     <div style={{
-      padding: "14px 16px", background: "#08080f",
+      padding: "14px 16px", background: "#0d0d16",
       border: "1px solid #1a1a2e", borderRadius: 8,
     }}>
-      <div style={{ fontSize: 9, color: "#6a6a82", letterSpacing: "0.12em", marginBottom: 6, fontFamily: '"JetBrains Mono", monospace' }}>
+      <div style={{ fontSize: 9, color: "#6a6a82", letterSpacing: "0.12em", marginBottom: 6, fontFamily: "monospace" }}>
         {label}
       </div>
-      <div style={{ fontSize: 20, fontWeight: 700, color, fontFamily: '"JetBrains Mono", monospace' }}>
+      <div style={{ fontSize: 20, fontWeight: 700, color, fontFamily: "monospace" }}>
         {value}
       </div>
       {sub && (
-        <div style={{ fontSize: 9, color: "#6a6a82", marginTop: 4, fontFamily: '"JetBrains Mono", monospace' }}>
+        <div style={{ fontSize: 9, color: "#6a6a82", marginTop: 4, fontFamily: "monospace" }}>
           {sub}
         </div>
       )}
