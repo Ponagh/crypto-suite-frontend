@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { ConnectButton, useWallet } from './wallet-integration';
 import BaseAlpha from './apps/base-alpha/BaseAlpha';
 import YieldPilot from './yield-pilot';
@@ -19,15 +19,22 @@ function AppContent() {
   const [activeApp, setActiveApp] = useState('alpha');
   const { address, isConnected } = useWallet();
 
-  const isAdmin = address && address.toLowerCase() === ADMIN_WALLET;
+  // Admin: wallet must be connected AND match ADMIN_WALLET.
+  // Re-evaluates whenever address changes (handles mobile wallet reconnect).
+  const isAdmin = !!(address && address.toLowerCase() === ADMIN_WALLET);
 
   const APPS = isAdmin
-    ? [...BASE_APPS, { id: 'admin', label: 'Admin', icon: '⚙️' }]
+    ? [...BASE_APPS, { id: 'admin', label: 'Admin', icon: '⚙' }]
     : BASE_APPS;
 
+  // If admin tab was active but wallet disconnected, fall back to alpha
+  useEffect(() => {
+    if (activeApp === 'admin' && !isAdmin) setActiveApp('alpha');
+  }, [isAdmin, activeApp]);
+
   return (
-    <div style={{ minHeight: '100vh', background: 'var(--bg)' }}>
-      {/* Nav Bar */}
+    <div style={{ minHeight: '100vh', background: 'var(--bg)', display: 'flex', flexDirection: 'column' }}>
+      {/* ── Nav Bar ──────────────────────────────────────────────────── */}
       <nav className="app-nav">
         <div className="app-nav-tabs">
           {APPS.map(app => (
@@ -37,7 +44,7 @@ function AppContent() {
               className={`app-nav-tab ${activeApp === app.id ? 'active' : ''}`}
             >
               <span>{app.icon}</span>
-              {app.label}
+              <span className="app-nav-label">{app.label}</span>
             </button>
           ))}
         </div>
@@ -45,26 +52,68 @@ function AppContent() {
           {isConnected && (
             <span className="app-nav-status">
               <span className="app-nav-dot" />
-              Base Mainnet
+              <span className="app-nav-network">Base</span>
             </span>
           )}
           <ConnectButton />
         </div>
       </nav>
 
-      {/* Active App */}
-      {activeApp === 'alpha' && <BaseAlpha apiUrl={API_URL} />}
-      {activeApp === 'yield' && <YieldPilot apiUrl={API_URL} />}
-      {activeApp === 'forge' && <AgentForge apiUrl={API_URL} />}
-      {activeApp === 'admin' && isAdmin && <Admin apiUrl={API_URL} />}
+      {/* ── Active App ────────────────────────────────────────────────── */}
+      <div style={{ flex: 1 }}>
+        {activeApp === 'alpha' && <BaseAlpha apiUrl={API_URL} />}
+        {activeApp === 'yield' && <YieldPilot apiUrl={API_URL} />}
+        {activeApp === 'forge' && <AgentForge apiUrl={API_URL} />}
+        {activeApp === 'admin' && isAdmin && <Admin apiUrl={API_URL} />}
+      </div>
+
+      {/* ── Footer ────────────────────────────────────────────────────── */}
+      <footer style={{
+        borderTop: '1px solid rgba(255,255,255,0.06)',
+        padding: '14px 24px',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        flexWrap: 'wrap',
+        gap: 10,
+        fontSize: 11,
+        color: 'rgba(255,255,255,0.3)',
+        fontFamily: 'var(--font-mono, monospace)',
+        letterSpacing: '0.05em',
+        background: 'rgba(0,0,0,0.4)',
+      }}>
+        <span>ARCA · BASE MAINNET · PRIVATE BETA · © 2026</span>
+        <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
+          <a
+            href="https://base-alpha-landing.vercel.app/privacy-policy"
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ color: 'rgba(255,255,255,0.4)', textDecoration: 'none' }}
+          >
+            Privacy Policy
+          </a>
+          <a
+            href="https://basescan.org/address/0x8d0420fe81C3499D414ac3dEB2f37E8F5297df9F"
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ color: 'rgba(255,255,255,0.4)', textDecoration: 'none' }}
+          >
+            Contracts ↗
+          </a>
+          <a
+            href="https://base-alpha-landing.vercel.app"
+            style={{ color: 'rgba(255,255,255,0.4)', textDecoration: 'none' }}
+          >
+            About
+          </a>
+        </div>
+      </footer>
     </div>
   );
 }
 
 function App() {
-  return (
-    <AppContent />
-  );
+  return <AppContent />;
 }
 
 export default App;
