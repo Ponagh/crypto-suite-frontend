@@ -51,6 +51,7 @@ export default function BaseAlpha({ apiUrl }) {
   const [trackedWallets, setTrackedWallets] = useState([]);
   const [walletCount, setWalletCount] = useState(0);
   const [isAdminView, setIsAdminView] = useState(false);
+  const [walletsLoaded, setWalletsLoaded] = useState(false);
   const [subscription, setSubscription] = useState({ tier: "free", isActive: false });
   const [tab, setTab] = useState("feed");
   const [filter, setFilter] = useState("all");
@@ -100,12 +101,13 @@ export default function BaseAlpha({ apiUrl }) {
   const fetchTrackedWallets = useCallback(async () => {
     try {
       const res = await fetch(`${API}/api/alpha/wallets?wallet=${address || ""}`);
-      if (!res.ok) return;
+      if (!res.ok) { setWalletsLoaded(true); return; }
       const data = await res.json();
       setTrackedWallets(data.wallets || []);
       setWalletCount(data.count || 0);
       setIsAdminView(data.admin === true);
     } catch { /* silent */ }
+    finally { setWalletsLoaded(true); }
   }, [API, address]);
 
   // ─── Initial load + polling ────────────────────────────────
@@ -451,10 +453,15 @@ export default function BaseAlpha({ apiUrl }) {
 
             {trackedWallets.length === 0 ? (
               <div style={S.emptyState}>
-                <div style={{ fontSize: 32, marginBottom: 16 }}>◌</div>
+                <div style={{ fontSize: 32, marginBottom: 16 }}>{!walletsLoaded ? "◌" : "◇"}</div>
                 <div style={{ fontSize: 14, fontWeight: 700, color: "#dcdce5", marginBottom: 8 }}>
-                  Loading wallets...
+                  {!walletsLoaded ? "Loading wallets..." : "No wallet data"}
                 </div>
+                {walletsLoaded && (
+                  <div style={{ fontSize: 11, color: "#6a6a82", maxWidth: 280, margin: "0 auto", lineHeight: 1.6 }}>
+                    Could not load tracked wallets. Check your connection or try refreshing.
+                  </div>
+                )}
               </div>
             ) : (
               <div style={S.card}>
