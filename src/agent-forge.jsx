@@ -1429,61 +1429,47 @@ function CreateAgentModal({ open, onClose, onDeploy, currentSlots, maxSlots, isA
                 <input type="text" value={config[p] || ""} onChange={e => setConfig({ ...config, [p]: e.target.value })} placeholder={`Configure ${p.toLowerCase()}`} style={inputStyle(selected.color)} />
               </label>
             ))}
-            {/* ── Execution venue + leverage — Sentiment Long only ── */}
             {selected.supportsHL && (
-              <div style={{ marginTop: 4, marginBottom: 14 }}>
+              <div style={{ marginBottom: 14 }}>
                 <div style={{ fontSize: 9, letterSpacing: "0.2em", color: "#6a6a82", fontFamily: '"JetBrains Mono", monospace', marginBottom: 8 }}>EXECUTION_VENUE</div>
-                <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+                <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
                   {["base", "hyperliquid"].map(v => (
-                    <button
-                      key={v}
-                      onClick={() => setConfig(c => ({ ...c, "Execution venue": v, ...(v === "base" ? { "Leverage": "1" } : {}) }))}
-                      style={{
-                        flex: 1, padding: "10px 8px", fontSize: 10,
-                        fontFamily: '"JetBrains Mono", monospace', letterSpacing: "0.1em",
-                        fontWeight: 700, cursor: "pointer",
-                        background: (config["Execution venue"] || "base") === v ? "rgba(0,255,136,0.12)" : "transparent",
-                        color: (config["Execution venue"] || "base") === v ? "#00ff88" : "#6a6a82",
-                        border: `1px solid ${(config["Execution venue"] || "base") === v ? "#00ff88" : "#333"}`,
-                      }}
-                    >
-                      {v === "base" ? "◈ BASE SPOT" : "▲ HYPERLIQUID PERP"}
+                    <button key={v}
+                      onClick={() => setConfig(c2 => ({ ...c2, "Execution venue": v, ...(v==="base" ? {"Leverage":"1"} : {}) }))}
+                      style={{ flex:1, padding:"10px 8px", fontSize:10, fontFamily:'"JetBrains Mono", monospace', letterSpacing:"0.1em", fontWeight:700, cursor:"pointer",
+                        background: (config["Execution venue"]||"base")===v ? "rgba(0,255,136,0.12)" : "transparent",
+                        color: (config["Execution venue"]||"base")===v ? "#00ff88" : "#6a6a82",
+                        border: `1px solid ${(config["Execution venue"]||"base")===v ? "#00ff88" : "#333"}` }}>
+                      {v==="base" ? "◈ BASE SPOT" : "▲ HYPERLIQUID PERP"}
                     </button>
                   ))}
                 </div>
-                {(config["Execution venue"] || "base") === "base" && (
-                  <div style={{ padding: "8px 12px", background: "rgba(0,255,136,0.04)", border: "1px solid rgba(0,255,136,0.12)", fontSize: 9, color: "#6a6a82", fontFamily: '"JetBrains Mono", monospace', lineHeight: 1.6 }}>
-                    Buys spot tokens on Base via Aerodrome / Uniswap V3 best-route. No leverage. Lower risk.
-                  </div>
-                )}
-                {(config["Execution venue"] || "base") === "hyperliquid" && (
+                {(config["Execution venue"]||"base")==="hyperliquid" && (
                   <div>
-                    <div style={{ padding: "8px 12px", marginBottom: 10, background: "rgba(255,45,146,0.04)", border: "1px solid rgba(255,45,146,0.15)", fontSize: 9, color: "#6a6a82", fontFamily: '"JetBrains Mono", monospace', lineHeight: 1.6 }}>
-                      Opens leveraged perp positions on Hyperliquid when funding rate signals are bullish. Live mode only — paper mode simulates the signal.
+                    <div style={{ padding:"8px 12px", marginBottom:8, background:"rgba(255,45,146,0.04)", border:"1px solid rgba(255,45,146,0.15)", fontSize:9, color:"#6a6a82", fontFamily:'"JetBrains Mono", monospace', lineHeight:1.6 }}>
+                      Opens leveraged perp positions on Hyperliquid on bullish funding rate signals.
                     </div>
-                    <div style={{ fontSize: 9, letterSpacing: "0.2em", color: "#6a6a82", fontFamily: '"JetBrains Mono", monospace', marginBottom: 6 }}>
-                      LEVERAGE · {config["Leverage"] || "2"}x
+                    <div style={{ fontSize:9, letterSpacing:"0.2em", color:"#6a6a82", fontFamily:'"JetBrains Mono", monospace', marginBottom:6 }}>
+                      LEVERAGE · {config["Leverage"]||"2"}x
                     </div>
-                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                      <span style={{ fontSize: 9, color: "#6a6a82", fontFamily: '"JetBrains Mono", monospace' }}>1x</span>
-                      <input
-                        type="range" min="1" max="5" step="1"
-                        value={parseInt(config["Leverage"] || "2")}
-                        onChange={e => setConfig(c => ({ ...c, "Leverage": e.target.value }))}
-                        style={{ flex: 1, accentColor: "#ff2d92", cursor: "pointer" }}
-                      />
-                      <span style={{ fontSize: 9, color: "#6a6a82", fontFamily: '"JetBrains Mono", monospace' }}>5x</span>
-                      <span style={{ padding: "3px 8px", background: "rgba(255,45,146,0.12)", color: "#ff2d92", fontSize: 10, fontFamily: '"JetBrains Mono", monospace', fontWeight: 700, border: "1px solid rgba(255,45,146,0.3)", minWidth: 32, textAlign: "center" }}>
-                        {config["Leverage"] || "2"}x
+                    <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:6 }}>
+                      <span style={{ fontSize:9, color:"#6a6a82" }}>1x</span>
+                      <input type="range" min="1" max="5" step="1"
+                        value={parseInt(config["Leverage"]||"2")}
+                        onChange={e => setConfig(c2 => ({ ...c2, "Leverage": e.target.value }))}
+                        style={{ flex:1, accentColor:"#ff2d92", cursor:"pointer" }} />
+                      <span style={{ fontSize:9, color:"#6a6a82" }}>5x</span>
+                      <span style={{ padding:"3px 8px", background:"rgba(255,45,146,0.12)", color:"#ff2d92", fontSize:10, fontFamily:'"JetBrains Mono", monospace', fontWeight:700, border:"1px solid rgba(255,45,146,0.3)", minWidth:32, textAlign:"center" }}>
+                        {config["Leverage"]||"2"}x
                       </span>
                     </div>
-                    <div style={{ marginTop: 8, display: "flex", gap: 6 }}>
+                    <div style={{ display:"flex", gap:6 }}>
                       {["1","2","3","5"].map(l => (
-                        <button key={l} onClick={() => setConfig(c => ({ ...c, "Leverage": l }))}
-                          style={{ flex: 1, padding: "5px 0", fontSize: 9, fontFamily: '"JetBrains Mono", monospace', fontWeight: 700, cursor: "pointer",
-                            background: (config["Leverage"] || "2") === l ? "rgba(255,45,146,0.15)" : "transparent",
-                            color: (config["Leverage"] || "2") === l ? "#ff2d92" : "#6a6a82",
-                            border: `1px solid ${(config["Leverage"] || "2") === l ? "rgba(255,45,146,0.4)" : "#333"}` }}>
+                        <button key={l} onClick={() => setConfig(c2 => ({ ...c2, "Leverage": l }))}
+                          style={{ flex:1, padding:"5px 0", fontSize:9, fontFamily:'"JetBrains Mono", monospace', fontWeight:700, cursor:"pointer",
+                            background:(config["Leverage"]||"2")===l ? "rgba(255,45,146,0.15)" : "transparent",
+                            color:(config["Leverage"]||"2")===l ? "#ff2d92" : "#6a6a82",
+                            border:`1px solid ${(config["Leverage"]||"2")===l ? "rgba(255,45,146,0.4)" : "#333"}` }}>
                           {l}x
                         </button>
                       ))}
@@ -1492,29 +1478,6 @@ function CreateAgentModal({ open, onClose, onDeploy, currentSlots, maxSlots, isA
                 )}
               </div>
             )}
-
-            {/* ── Confidence threshold — Sentiment Long only ── */}
-            {selected.supportsHL && (
-              <label style={{ display: "block", marginBottom: 14 }}>
-                <div style={{ fontSize: 9, letterSpacing: "0.2em", color: "#6a6a82", fontFamily: '"JetBrains Mono", monospace', marginBottom: 6 }}>
-                  CONFIDENCE_THRESHOLD · {Math.round((parseFloat(config["Confidence threshold"] || "0.3")) * 100)}%
-                </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  <span style={{ fontSize: 9, color: "#6a6a82", fontFamily: '"JetBrains Mono", monospace' }}>10%</span>
-                  <input
-                    type="range" min="0.1" max="0.9" step="0.05"
-                    value={parseFloat(config["Confidence threshold"] || "0.3")}
-                    onChange={e => setConfig(c => ({ ...c, "Confidence threshold": e.target.value }))}
-                    style={{ flex: 1, accentColor: "#00ff88", cursor: "pointer" }}
-                  />
-                  <span style={{ fontSize: 9, color: "#6a6a82", fontFamily: '"JetBrains Mono", monospace' }}>90%</span>
-                </div>
-                <div style={{ marginTop: 4, fontSize: 9, color: "#6a6a82", fontFamily: '"JetBrains Mono", monospace', lineHeight: 1.5 }}>
-                  Min HL funding rate confidence to enter a position. Higher = fewer but stronger signals.
-                </div>
-              </label>
-            )}
-
             <div style={{ marginTop: 20, padding: 14, border: `1px solid ${isAllowlisted ? "#ff2d92" : "#00ffee"}33`, background: "rgba(0,0,0,0.3)" }}>
               <div style={{ fontSize: 9, letterSpacing: "0.2em", color: "#6a6a82", fontFamily: '"JetBrains Mono", monospace', marginBottom: 10 }}>EXECUTION_MODE</div>
               <div style={{ display: "flex", gap: 8 }}>
@@ -1555,12 +1518,14 @@ const inputStyle = (color) => ({ width: "100%", padding: "12px 14px", fontSize: 
 // renders a self-contained deposit guide. Shown in the inspector drawer for
 // all agents — paper agents see a "not yet provisioned" state with explanation.
 function WalletFundingPanel({ agent, apiUrl }) {
+  const { address } = useWallet();
   const [cdpAddress, setCdpAddress]   = useState(null);
   const [loading, setLoading]         = useState(true);
   const [copied, setCopied]           = useState(false);
+  const [provisioning, setProvisioning] = useState(false);
   const [expanded, setExpanded]       = useState(agent.mode === "live");
 
-  useEffect(() => {
+  const fetchPolicy = () => {
     if (!agent || !apiUrl) return;
     fetch(`${apiUrl}/api/agents/${agent.id}/policy`)
       .then(r => r.ok ? r.json() : null)
@@ -1569,7 +1534,33 @@ function WalletFundingPanel({ agent, apiUrl }) {
         setLoading(false);
       })
       .catch(() => setLoading(false));
-  }, [agent, apiUrl]);
+  };
+
+  useEffect(() => { fetchPolicy(); }, [agent.id, apiUrl]);
+
+  const handleProvision = async () => {
+    if (!address || provisioning) return;
+    setProvisioning(true);
+    try {
+      const res = await fetch(`${apiUrl}/api/agents/${agent.id}/provision-wallet`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Wallet-Address": address.toLowerCase(),
+        },
+      });
+      const data = await res.json();
+      if (data.cdp_account_address) {
+        setCdpAddress(data.cdp_account_address);
+      } else if (data.error) {
+        alert(`Provision failed: ${data.error}`);
+      }
+    } catch (err) {
+      alert(`Provision failed: ${err.message}`);
+    } finally {
+      setProvisioning(false);
+    }
+  };
 
   const copy = () => {
     if (!cdpAddress) return;
@@ -1607,18 +1598,28 @@ function WalletFundingPanel({ agent, apiUrl }) {
       {expanded && (
         <div style={{ padding: "0 14px 14px", fontFamily: '"JetBrains Mono", monospace' }}>
 
-          {/* ── Live mode, wallet not yet provisioned (first live activation) ── */}
+          {/* ── Live mode, wallet not yet provisioned ── */}
           {!loading && !isProvisioned && isLive && (
             <div>
-              <div style={{ padding: 12, background: "rgba(255,45,146,0.04)", border: "1px solid rgba(255,45,146,0.2)", fontSize: 10, color: "#6a6a82", lineHeight: 1.7 }}>
-                <div style={{ color: "#ff2d92", fontWeight: 700, marginBottom: 6 }}>▲ LIVE MODE — WALLET PENDING</div>
-                This agent is in LIVE mode. A dedicated CDP wallet will be
-                automatically created and funded on the first live trade attempt.
-                <div style={{ marginTop: 10, color: "#dcdce5" }}>
-                  The wallet address will appear here after the first tick executes.
-                  Make sure the agent is running and check back in 2-3 minutes.
-                </div>
+              <div style={{ padding: 12, background: "rgba(255,45,146,0.04)", border: "1px solid rgba(255,45,146,0.2)", fontSize: 10, color: "#6a6a82", lineHeight: 1.7, marginBottom: 10 }}>
+                <div style={{ color: "#ff2d92", fontWeight: 700, marginBottom: 6 }}>▲ LIVE MODE — WALLET NOT YET PROVISIONED</div>
+                A dedicated CDP wallet is created automatically on the first live trade.
+                If no trade has fired yet, you can provision it now to get the deposit address immediately.
               </div>
+              <button
+                onClick={handleProvision}
+                disabled={provisioning}
+                style={{
+                  width: "100%", padding: "10px 0", fontSize: 10,
+                  fontFamily: '"JetBrains Mono", monospace', fontWeight: 700,
+                  letterSpacing: "0.12em", cursor: provisioning ? "wait" : "pointer",
+                  background: "rgba(255,45,146,0.12)", color: "#ff2d92",
+                  border: "1px solid rgba(255,45,146,0.4)",
+                  opacity: provisioning ? 0.6 : 1,
+                }}
+              >
+                {provisioning ? "PROVISIONING..." : "⚡ PROVISION WALLET NOW"}
+              </button>
             </div>
           )}
 
@@ -1754,24 +1755,12 @@ function AgentDetailDrawer({ agent, open, onClose, apiUrl }) {
             {!agent.config || Object.keys(agent.config).length === 0 ? (
               <span style={{ color: "#6a6a82" }}>No custom configuration</span>
             ) : (
-              Object.entries(agent.config).map(([k, v]) => {
-                const isVenue = k === "Execution venue";
-                const isLev   = k === "Leverage";
-                const valColor = isVenue && v === "hyperliquid" ? "#ff2d92"
-                               : isVenue ? "#00ff88"
-                               : isLev   ? "#ff9500"
-                               : "#dcdce5";
-                const valText  = isVenue && v === "hyperliquid" ? "▲ HYPERLIQUID PERP"
-                               : isVenue ? "◈ BASE SPOT"
-                               : isLev   ? `${v}x leverage`
-                               : String(v);
-                return (
-                  <div key={k} style={{ display: "flex", justifyContent: "space-between", padding: "3px 0" }}>
-                    <span style={{ color: "#6a6a82" }}>{k.replace(/ /g, "_").toUpperCase()}</span>
-                    <span style={{ color: valColor, fontWeight: isVenue || isLev ? 700 : 400 }}>{valText}</span>
-                  </div>
-                );
-              })
+              Object.entries(agent.config).map(([k, v]) => (
+                <div key={k} style={{ display: "flex", justifyContent: "space-between", padding: "3px 0" }}>
+                  <span style={{ color: "#6a6a82" }}>{k.replace(/ /g, "_").toUpperCase()}</span>
+                  <span style={{ color: "#dcdce5" }}>{String(v)}</span>
+                </div>
+              ))
             )}
           </div>
         </div>
