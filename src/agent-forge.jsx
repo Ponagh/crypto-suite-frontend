@@ -1429,55 +1429,6 @@ function CreateAgentModal({ open, onClose, onDeploy, currentSlots, maxSlots, isA
                 <input type="text" value={config[p] || ""} onChange={e => setConfig({ ...config, [p]: e.target.value })} placeholder={`Configure ${p.toLowerCase()}`} style={inputStyle(selected.color)} />
               </label>
             ))}
-            {selected.supportsHL && (
-              <div style={{ marginBottom: 14 }}>
-                <div style={{ fontSize: 9, letterSpacing: "0.2em", color: "#6a6a82", fontFamily: '"JetBrains Mono", monospace', marginBottom: 8 }}>EXECUTION_VENUE</div>
-                <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
-                  {["base", "hyperliquid"].map(v => (
-                    <button key={v}
-                      onClick={() => setConfig(c2 => ({ ...c2, "Execution venue": v, ...(v==="base" ? {"Leverage":"1"} : {}) }))}
-                      style={{ flex:1, padding:"10px 8px", fontSize:10, fontFamily:'"JetBrains Mono", monospace', letterSpacing:"0.1em", fontWeight:700, cursor:"pointer",
-                        background: (config["Execution venue"]||"base")===v ? "rgba(0,255,136,0.12)" : "transparent",
-                        color: (config["Execution venue"]||"base")===v ? "#00ff88" : "#6a6a82",
-                        border: `1px solid ${(config["Execution venue"]||"base")===v ? "#00ff88" : "#333"}` }}>
-                      {v==="base" ? "◈ BASE SPOT" : "▲ HYPERLIQUID PERP"}
-                    </button>
-                  ))}
-                </div>
-                {(config["Execution venue"]||"base")==="hyperliquid" && (
-                  <div>
-                    <div style={{ padding:"8px 12px", marginBottom:8, background:"rgba(255,45,146,0.04)", border:"1px solid rgba(255,45,146,0.15)", fontSize:9, color:"#6a6a82", fontFamily:'"JetBrains Mono", monospace', lineHeight:1.6 }}>
-                      Opens leveraged perp positions on Hyperliquid on bullish funding rate signals.
-                    </div>
-                    <div style={{ fontSize:9, letterSpacing:"0.2em", color:"#6a6a82", fontFamily:'"JetBrains Mono", monospace', marginBottom:6 }}>
-                      LEVERAGE · {config["Leverage"]||"2"}x
-                    </div>
-                    <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:6 }}>
-                      <span style={{ fontSize:9, color:"#6a6a82" }}>1x</span>
-                      <input type="range" min="1" max="5" step="1"
-                        value={parseInt(config["Leverage"]||"2")}
-                        onChange={e => setConfig(c2 => ({ ...c2, "Leverage": e.target.value }))}
-                        style={{ flex:1, accentColor:"#ff2d92", cursor:"pointer" }} />
-                      <span style={{ fontSize:9, color:"#6a6a82" }}>5x</span>
-                      <span style={{ padding:"3px 8px", background:"rgba(255,45,146,0.12)", color:"#ff2d92", fontSize:10, fontFamily:'"JetBrains Mono", monospace', fontWeight:700, border:"1px solid rgba(255,45,146,0.3)", minWidth:32, textAlign:"center" }}>
-                        {config["Leverage"]||"2"}x
-                      </span>
-                    </div>
-                    <div style={{ display:"flex", gap:6 }}>
-                      {["1","2","3","5"].map(l => (
-                        <button key={l} onClick={() => setConfig(c2 => ({ ...c2, "Leverage": l }))}
-                          style={{ flex:1, padding:"5px 0", fontSize:9, fontFamily:'"JetBrains Mono", monospace', fontWeight:700, cursor:"pointer",
-                            background:(config["Leverage"]||"2")===l ? "rgba(255,45,146,0.15)" : "transparent",
-                            color:(config["Leverage"]||"2")===l ? "#ff2d92" : "#6a6a82",
-                            border:`1px solid ${(config["Leverage"]||"2")===l ? "rgba(255,45,146,0.4)" : "#333"}` }}>
-                          {l}x
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
             <div style={{ marginTop: 20, padding: 14, border: `1px solid ${isAllowlisted ? "#ff2d92" : "#00ffee"}33`, background: "rgba(0,0,0,0.3)" }}>
               <div style={{ fontSize: 9, letterSpacing: "0.2em", color: "#6a6a82", fontFamily: '"JetBrains Mono", monospace', marginBottom: 10 }}>EXECUTION_MODE</div>
               <div style={{ display: "flex", gap: 8 }}>
@@ -1519,48 +1470,21 @@ const inputStyle = (color) => ({ width: "100%", padding: "12px 14px", fontSize: 
 // all agents — paper agents see a "not yet provisioned" state with explanation.
 function WalletFundingPanel({ agent, apiUrl }) {
   const { address } = useWallet();
-  const [cdpAddress, setCdpAddress]   = useState(null);
-  const [loading, setLoading]         = useState(true);
-  const [copied, setCopied]           = useState(false);
+  const [cdpAddress, setCdpAddress]     = useState(null);
+  const [loading, setLoading]           = useState(true);
+  const [copied, setCopied]             = useState(false);
   const [provisioning, setProvisioning] = useState(false);
-  const [expanded, setExpanded]       = useState(agent.mode === "live");
+  const [expanded, setExpanded]         = useState(agent.mode === "live");
 
-  const fetchPolicy = () => {
-    if (!agent || !apiUrl) return;
+  const fetchPolicy = useCallback(() => {
+    if (!agent?.id || !apiUrl) return;
     fetch(`${apiUrl}/api/agents/${agent.id}/policy`)
       .then(r => r.ok ? r.json() : null)
-      .then(d => {
-        setCdpAddress(d?.policy?.cdp_account_address || null);
-        setLoading(false);
-      })
+      .then(d => { setCdpAddress(d?.policy?.cdp_account_address || null); setLoading(false); })
       .catch(() => setLoading(false));
-  };
+  }, [agent?.id, apiUrl]);
 
-  useEffect(() => { fetchPolicy(); }, [agent.id, apiUrl]);
-
-  const handleProvision = async () => {
-    if (!address || provisioning) return;
-    setProvisioning(true);
-    try {
-      const res = await fetch(`${apiUrl}/api/agents/${agent.id}/provision-wallet`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Wallet-Address": address.toLowerCase(),
-        },
-      });
-      const data = await res.json();
-      if (data.cdp_account_address) {
-        setCdpAddress(data.cdp_account_address);
-      } else if (data.error) {
-        alert(`Provision failed: ${data.error}`);
-      }
-    } catch (err) {
-      alert(`Provision failed: ${err.message}`);
-    } finally {
-      setProvisioning(false);
-    }
-  };
+  useEffect(() => { fetchPolicy(); }, [fetchPolicy]);
 
   const copy = () => {
     if (!cdpAddress) return;
@@ -1570,9 +1494,24 @@ function WalletFundingPanel({ agent, apiUrl }) {
     });
   };
 
-  const isLive       = agent.mode === "live";
+  const handleProvision = async () => {
+    if (!address || provisioning) return;
+    setProvisioning(true);
+    try {
+      const res = await fetch(`${apiUrl}/api/agents/${agent.id}/provision-wallet`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Wallet-Address": address.toLowerCase() },
+      });
+      const data = await res.json();
+      if (data.cdp_account_address) { setCdpAddress(data.cdp_account_address); }
+      else if (data.error) { alert("Provision failed: " + data.error); }
+    } catch (err) { alert("Provision failed: " + err.message); }
+    finally { setProvisioning(false); }
+  };
+
+  const isLive        = agent.mode === "live";
   const isProvisioned = !!cdpAddress;
-  const accentColor  = isLive ? "#ff2d92" : "#00ffee";
+  const accentColor   = isLive ? "#ff2d92" : "#00ffee";
 
   return (
     <div style={{ marginBottom: 22, border: `1px solid ${accentColor}33`, background: "rgba(5,5,12,0.9)" }}>
@@ -1598,28 +1537,18 @@ function WalletFundingPanel({ agent, apiUrl }) {
       {expanded && (
         <div style={{ padding: "0 14px 14px", fontFamily: '"JetBrains Mono", monospace' }}>
 
-          {/* ── Live mode, wallet not yet provisioned ── */}
+          {/* ── Live mode, wallet not yet provisioned (first live activation) ── */}
           {!loading && !isProvisioned && isLive && (
             <div>
-              <div style={{ padding: 12, background: "rgba(255,45,146,0.04)", border: "1px solid rgba(255,45,146,0.2)", fontSize: 10, color: "#6a6a82", lineHeight: 1.7, marginBottom: 10 }}>
-                <div style={{ color: "#ff2d92", fontWeight: 700, marginBottom: 6 }}>▲ LIVE MODE — WALLET NOT YET PROVISIONED</div>
-                A dedicated CDP wallet is created automatically on the first live trade.
-                If no trade has fired yet, you can provision it now to get the deposit address immediately.
+              <div style={{ padding: 12, background: "rgba(255,45,146,0.04)", border: "1px solid rgba(255,45,146,0.2)", fontSize: 10, color: "#6a6a82", lineHeight: 1.7 }}>
+                <div style={{ color: "#ff2d92", fontWeight: 700, marginBottom: 6 }}>▲ LIVE MODE — WALLET PENDING</div>
+                This agent is in LIVE mode. A dedicated CDP wallet will be
+                automatically created and funded on the first live trade attempt.
+                <div style={{ marginTop: 10, color: "#dcdce5" }}>
+                  The wallet address will appear here after the first tick executes.
+                  Make sure the agent is running and check back in 2-3 minutes.
+                </div>
               </div>
-              <button
-                onClick={handleProvision}
-                disabled={provisioning}
-                style={{
-                  width: "100%", padding: "10px 0", fontSize: 10,
-                  fontFamily: '"JetBrains Mono", monospace', fontWeight: 700,
-                  letterSpacing: "0.12em", cursor: provisioning ? "wait" : "pointer",
-                  background: "rgba(255,45,146,0.12)", color: "#ff2d92",
-                  border: "1px solid rgba(255,45,146,0.4)",
-                  opacity: provisioning ? 0.6 : 1,
-                }}
-              >
-                {provisioning ? "PROVISIONING..." : "⚡ PROVISION WALLET NOW"}
-              </button>
             </div>
           )}
 
@@ -2048,7 +1977,25 @@ export default function AgentForge({ apiUrl }) {
     await fetch(`${apiUrl}/api/agents/${id}`, { method: "DELETE" });
     fetchAgents();
   };
-  const handleUpgrade = () => alert("Subscription upgrade flow: Stripe + on-chain NFT minting coming in next phase.");
+  const handleUpgrade = async () => {
+    if (!address) { alert("Connect your wallet first."); return; }
+    try {
+      // Create Stripe checkout session
+      const res = await fetch(`${apiUrl}/api/stripe/checkout`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ wallet: address, tier: "pro" }),
+      });
+      const data = await res.json();
+      if (data.url) {
+        window.open(data.url, "_blank");
+      } else {
+        alert(data.error || "Failed to start checkout. Try again.");
+      }
+    } catch (err) {
+      alert("Checkout unavailable: " + err.message);
+    }
+  };
 
   const tierMeta = TIER_META[subscription.tier] || TIER_META[0];
 
