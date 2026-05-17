@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { ethers } from "ethers";
-import { useWallet } from "./wallet-integration";
+import { useWallet, useAgentDeploy } from "./wallet-integration";
 import {
   LineChart, Line, AreaChart, Area, ResponsiveContainer,
   Tooltip, ReferenceLine, YAxis, XAxis,
@@ -690,9 +690,11 @@ function ScatterTooltip({ active, payload }) {
 
 // ─── S3: Policy violations badge ──────────────────────────────────────────
 // Polls /api/agents/:id/violations every 60s. Shows count in last 24h.
-// Hidden when zero. Click → opens the policy modal scrolled to History tab.
+// Hidden in paper mode (paper trades intentionally violate caps to prove
+// enforcement works; surfacing those numbers scares users with noise).
+// Click → opens the policy modal scrolled to History tab.
 
-function ViolationsBadge({ agentId, apiUrl, onClick }) {
+function ViolationsBadge({ agentId, agentMode, apiUrl, onClick }) {
   const [count, setCount] = useState(0);
 
   const refresh = useCallback(async () => {
@@ -712,11 +714,14 @@ function ViolationsBadge({ agentId, apiUrl, onClick }) {
   }, [agentId, apiUrl]);
 
   useEffect(() => {
+    // Don't poll for paper agents — saves egress and avoids stale renders
+    if (agentMode !== "live") return;
     refresh();
     const handle = setInterval(refresh, 60_000);
     return () => clearInterval(handle);
-  }, [refresh]);
+  }, [refresh, agentMode]);
 
+  if (agentMode !== "live") return null;
   if (count <= 0) return null;
 
   return (
@@ -1234,7 +1239,7 @@ function AgentCard({ agent, onPause, onResume, onDelete, onInspect, onEditPolicy
           </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <ViolationsBadge agentId={agent.id} apiUrl={apiUrl} onClick={() => onEditPolicy && onEditPolicy(agent, "history")} />
+          <ViolationsBadge agentId={agent.id} agentMode={agent.mode} apiUrl={apiUrl} onClick={() => onEditPolicy && onEditPolicy(agent, "history")} />
           <StatusDot status={agent.status} />
           <span style={{
             fontSize: 9,
@@ -1304,6 +1309,162 @@ function AgentCard({ agent, onPause, onResume, onDelete, onInspect, onEditPolicy
         <GlowButton onClick={() => onEditPolicy && onEditPolicy(agent, "risk")} color="#a855f7" variant="ghost" size="sm" style={{ flex: 1 }}>POLICY</GlowButton>
         <GlowButton onClick={() => onInspect(agent)} color="#00ffee" variant="ghost" size="sm" style={{ flex: 1 }}>INSPECT</GlowButton>
         <GlowButton onClick={() => onDelete(agent.id)} color="#ff2d92" variant="ghost" size="sm" style={{ flex: 1 }}>TERMINATE</GlowButton>
+      </div>
+    </div>
+  );
+}
+
+// ─── Subscription upgrade confirmation modal ──────────────────────────────
+// Shown after the user clicks UPGRADE on SubscriptionCard. Fetches the
+// current on-chain price for the target tier, shows it in both ETH and an
+// indicative USD figure, then triggers the subscribe() transaction on confirm.
+// All state transitions (pending / success / error) are driven from the
+// parent's upgradeStatus prop so the user sees consistent feedback.
+function UpgradeModal({ target, status, onConfirm, onCancel }) {
+  const [priceWei, setPriceWei] = useState(null);
+  const [priceLoading, setPriceLoading] = useState(false);
+
+  // Fetch on-chain price whenever a new target is set
+  useEffect(() => {
+    if (!target) { setPriceWei(null); return; }
+    let cancelled = false;
+    (async () => {
+      setPriceLoading(true);
+      try {
+        const provider = new ethers.JsonRpcProvider(
+          process.env.REACT_APP_BASE_RPC_URL || "https://mainnet.base.org"
+        );
+        const abi = [
+          "function priceStarter() view returns (uint256)",
+          "function pricePro() view returns (uint256)",
+          "function priceEnterprise() view returns (uint256)",
+        ];
+        const c = new ethers.Contract(
+          "0xa67421E8d9119247708c4474BE3Dc76567fC618f",
+          abi,
+          provider
+        );
+        // Tier 1 (UI "Pro") = priceStarter, Tier 2 (UI "Whale") = pricePro
+        const wei = target.tier === 1
+          ? await c.priceStarter()
+          : target.tier === 2
+          ? await c.pricePro()
+          : await c.priceEnterprise();
+        if (!cancelled) setPriceWei(wei);
+      } catch (e) {
+        console.warn("[upgrade] price fetch failed:", e?.message);
+      } finally {
+        if (!cancelled) setPriceLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [target]);
+
+  if (!target) return null;
+
+  const ethStr = priceWei != null ? ethers.formatEther(priceWei) : null;
+  const inFlight = status?.type === "pending";
+
+  return (
+    <div
+      onClick={inFlight ? undefined : onCancel}
+      style={{
+        position: "fixed", inset: 0, zIndex: 1000,
+        background: "rgba(0,0,0,0.78)", backdropFilter: "blur(6px)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        padding: 16,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: "100%", maxWidth: 460, padding: 28,
+          background: "#07070d", border: `1px solid ${target.color}66`,
+          fontFamily: '"JetBrains Mono", monospace', color: "#dcdce5",
+          boxShadow: `0 0 60px ${target.glow}`,
+        }}
+      >
+        <div style={{ fontSize: 10, letterSpacing: "0.25em", color: "#6a6a82", marginBottom: 6 }}>
+          [ SUBSCRIPTION_UPGRADE ]
+        </div>
+        <div style={{
+          fontSize: 22, fontWeight: 900, letterSpacing: "0.08em", color: target.color, marginBottom: 18,
+        }}>
+          UPGRADE → {target.name}
+        </div>
+
+        <div style={{
+          padding: 14, background: "rgba(0,0,0,0.4)", border: `1px solid ${target.color}33`,
+          marginBottom: 16, fontSize: 11, lineHeight: 1.7,
+        }}>
+          <div style={{ color: "#8a8a9e", marginBottom: 10 }}>
+            You're about to subscribe to the <strong style={{ color: target.color }}>{target.name}</strong> tier.
+            Payment is an on-chain transaction on Base.
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderTop: "1px solid #1a1a2e" }}>
+            <span style={{ color: "#6a6a82" }}>Agent slots</span>
+            <span>{target.allowed}</span>
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderTop: "1px solid #1a1a2e" }}>
+            <span style={{ color: "#6a6a82" }}>Indicative price</span>
+            <span>${target.priceUsd}/mo</span>
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderTop: "1px solid #1a1a2e" }}>
+            <span style={{ color: "#6a6a82" }}>On-chain cost</span>
+            <span style={{ color: target.color, fontWeight: 700 }}>
+              {priceLoading ? "loading..." : ethStr ? `${parseFloat(ethStr).toFixed(6)} ETH` : "—"}
+            </span>
+          </div>
+        </div>
+
+        {status && (
+          <div style={{
+            padding: 10, marginBottom: 16, fontSize: 11,
+            background: status.type === "error"   ? "rgba(255,68,102,0.10)"
+                      : status.type === "success" ? "rgba(0,220,130,0.10)"
+                                                  : "rgba(255,170,0,0.10)",
+            color:      status.type === "error"   ? "#ff4466"
+                      : status.type === "success" ? "#00dc82"
+                                                  : "#ffaa00",
+            border: `1px solid ${
+                          status.type === "error"   ? "rgba(255,68,102,0.4)"
+                        : status.type === "success" ? "rgba(0,220,130,0.4)"
+                                                    : "rgba(255,170,0,0.4)"}`,
+            wordBreak: "break-all",
+          }}>
+            {status.message}
+          </div>
+        )}
+
+        <div style={{ display: "flex", gap: 10 }}>
+          <button
+            onClick={onCancel}
+            disabled={inFlight}
+            style={{
+              flex: 1, padding: "11px 0", fontSize: 11, fontWeight: 700, letterSpacing: "0.15em",
+              fontFamily: '"JetBrains Mono", monospace',
+              background: "transparent", color: "#8a8a9e",
+              border: "1px solid #1a1a2e", cursor: inFlight ? "not-allowed" : "pointer",
+              opacity: inFlight ? 0.5 : 1,
+            }}
+          >
+            CANCEL
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={inFlight || priceLoading || status?.type === "success"}
+            style={{
+              flex: 2, padding: "11px 0", fontSize: 11, fontWeight: 700, letterSpacing: "0.15em",
+              fontFamily: '"JetBrains Mono", monospace',
+              background: inFlight ? `${target.color}22` : `${target.color}33`,
+              color: target.color, border: `1px solid ${target.color}`,
+              cursor: (inFlight || priceLoading) ? "progress" : "pointer",
+              opacity: (priceLoading || status?.type === "success") ? 0.5 : 1,
+            }}
+          >
+            {inFlight ? "PROCESSING..." : status?.type === "success" ? "✓ DONE" : `CONFIRM & SIGN`}
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -2003,24 +2164,51 @@ export default function AgentForge({ apiUrl }) {
     await fetch(`${apiUrl}/api/agents/${id}`, { method: "DELETE" });
     fetchAgents();
   };
-  const handleUpgrade = async () => {
+
+  // ─── On-chain subscription upgrade ──────────────────────────────────────
+  // Replaces the previous Stripe checkout flow (which wasn't operational).
+  // Uses the AgentForgeRegistry.subscribe(tier) payable contract method.
+  // Confirmation modal shows the user the actual ETH cost before signing.
+  const { subscribeAgentForge } = useAgentDeploy();
+  const [upgradeTarget, setUpgradeTarget] = useState(null);   // { tier, name, priceUsd } | null
+  const [upgradeStatus, setUpgradeStatus] = useState(null);   // { type: 'pending'|'success'|'error', message }
+
+  const handleUpgrade = () => {
     if (!address) { alert("Connect your wallet first."); return; }
+    const currentTier = subscription?.tier ?? 0;
+    const nextTier = TIER_META[currentTier + 1];
+    if (!nextTier) return;
+    setUpgradeStatus(null);
+    setUpgradeTarget({ tier: currentTier + 1, ...nextTier });
+  };
+
+  const handleConfirmUpgrade = async () => {
+    if (!upgradeTarget) return;
+    setUpgradeStatus({ type: "pending", message: "Awaiting wallet signature..." });
     try {
-      // Create Stripe checkout session
-      const res = await fetch(`${apiUrl}/api/stripe/checkout`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ wallet: address, tier: "pro" }),
+      const txHash = await subscribeAgentForge(upgradeTarget.tier);
+      setUpgradeStatus({ type: "pending", message: "Confirming on-chain..." });
+      // Wait briefly for backend cache to invalidate, then re-fetch
+      await new Promise(r => setTimeout(r, 1500));
+      await fetchSubscription();
+      setUpgradeStatus({
+        type: "success",
+        message: `✓ Subscribed to ${upgradeTarget.name} — tx: ${txHash?.slice(0, 12)}...`,
       });
-      const data = await res.json();
-      if (data.url) {
-        window.open(data.url, "_blank");
-      } else {
-        alert(data.error || "Failed to start checkout. Try again.");
-      }
+      setTimeout(() => { setUpgradeTarget(null); setUpgradeStatus(null); }, 2500);
     } catch (err) {
-      alert("Checkout unavailable: " + err.message);
+      // Common: user rejected in wallet
+      const msg = err?.code === "ACTION_REJECTED" || err?.code === 4001
+        ? "Transaction rejected in wallet."
+        : (err?.shortMessage || err?.message || "Upgrade failed");
+      setUpgradeStatus({ type: "error", message: msg });
     }
+  };
+
+  const handleCancelUpgrade = () => {
+    if (upgradeStatus?.type === "pending") return; // don't allow cancel mid-flight
+    setUpgradeTarget(null);
+    setUpgradeStatus(null);
   };
 
   const tierMeta = TIER_META[subscription.tier] || TIER_META[0];
@@ -2092,6 +2280,12 @@ export default function AgentForge({ apiUrl }) {
         initialTab={policyInitialTab}
         onClose={() => setPolicyAgent(null)}
         onSaved={() => { /* keep modal open, just refreshed internally */ }}
+      />
+      <UpgradeModal
+        target={upgradeTarget}
+        status={upgradeStatus}
+        onConfirm={handleConfirmUpgrade}
+        onCancel={handleCancelUpgrade}
       />
     </div>
   );
