@@ -18,7 +18,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useWallet } from './wallet-integration';
 
 export default function Admin({ apiUrl }) {
-  const { address, isConnected } = useWallet() || {};
+  const { address, connected: isConnected } = useWallet() || {};
   const [status, setStatus] = useState(null);
   const [agents, setAgents] = useState([]);
   const [transactions, setTransactions] = useState([]);
