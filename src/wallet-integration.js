@@ -32,11 +32,21 @@ export const CONTRACTS = {
   AgentForgeRegistry:    "0xa67421E8d9119247708c4474BE3Dc76567fC618f",
 };
 
+// USDC on Base mainnet (the asset YieldPilot vault holds)
+export const USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+
 export const BASE_CHAIN_ID = 8453;
 
 // ─────────────────────────────────────────────────────────────
 // ABIs
 // ─────────────────────────────────────────────────────────────
+const ABI_ERC20 = [
+  "function approve(address spender, uint256 amount) returns (bool)",
+  "function allowance(address owner, address spender) view returns (uint256)",
+  "function balanceOf(address owner) view returns (uint256)",
+  "function decimals() view returns (uint8)",
+];
+
 const ABI_BASE_ALPHA = [
   "function subscribe() external payable",
   "function isSubscribed(address user) view returns (bool)",
@@ -46,8 +56,10 @@ const ABI_BASE_ALPHA = [
 
 const ABI_YIELD_PILOT = [
   "function deposit(uint256 assets, address receiver) returns (uint256 shares)",
-  "function withdraw(uint256 assets, address receiver, address owner) returns (uint256 assets)",
+  "function withdraw(uint256 assets, address receiver, address owner) returns (uint256 shares)",
+  "function redeem(uint256 shares, address receiver, address owner) returns (uint256 assets)",
   "function convertToAssets(uint256 shares) view returns (uint256)",
+  "function convertToShares(uint256 assets) view returns (uint256)",
   "function balanceOf(address user) view returns (uint256)",
   "function totalAssets() view returns (uint256)",
 ];
@@ -252,7 +264,21 @@ export function useSubscribe() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// useVaultDeposit — YieldPilot
+// useVaultDeposit — YieldPilot (ERC4626 vault on Base)
+//
+// Deposit flow is TWO transactions:
+//   1. USDC.approve(vault, amount)   — if current allowance is insufficient
+//   2. vault.deposit(assets, receiver)
+//
+// We use an "infinite" approval (MaxUint256) so the user only signs the
+// approve once per wallet — same pattern used by Uniswap, Aave, and our
+// own agent-runner.ensureAgentAllowance. Subsequent deposits skip step 1.
+//
+// Withdraw uses ERC4626 redeem(shares, receiver, owner) since the modal
+// asks the user for SHARES, not asset amount.
+//
+// Both functions accept an optional { onStep } callback so the UI can
+// show "Approving..." vs "Depositing..." instead of one generic spinner.
 // ─────────────────────────────────────────────────────────────
 export function useVaultDeposit() {
   const { signer, address } = useWallet();
@@ -260,19 +286,61 @@ export function useVaultDeposit() {
   const [error,   setError]   = useState(null);
   const [txHash,  setTxHash]  = useState(null);
 
-  const deposit = useCallback(async (usdcAmount) => {
+  const deposit = useCallback(async (usdcAmount, { onStep } = {}) => {
     setLoading(true); setError(null); setTxHash(null);
     try {
       if (!signer || !address) throw new Error("Connect wallet first.");
       await ensureBaseChain(signer.provider);
-      const assets   = ethers.parseUnits(usdcAmount.toString(), 6);
-      const contract = new ethers.Contract(CONTRACTS.YieldPilotVault, ABI_YIELD_PILOT, signer);
-      const tx       = await contract.deposit(assets, address);
+
+      const assets = ethers.parseUnits(usdcAmount.toString(), 6);
+
+      // ── Step 1: ensure USDC allowance ───────────────────────
+      const usdc = new ethers.Contract(USDC_BASE, ABI_ERC20, signer);
+      const currentAllowance = await usdc.allowance(address, CONTRACTS.YieldPilotVault);
+
+      if (currentAllowance < assets) {
+        onStep?.("approving");
+        const approveTx = await usdc.approve(CONTRACTS.YieldPilotVault, ethers.MaxUint256);
+        await approveTx.wait();
+      }
+
+      // ── Step 2: deposit ────────────────────────────────────
+      onStep?.("depositing");
+      const vault = new ethers.Contract(CONTRACTS.YieldPilotVault, ABI_YIELD_PILOT, signer);
+      const tx    = await vault.deposit(assets, address);
       setTxHash(tx.hash);
       await tx.wait();
       return tx.hash;
-    } catch (err) { setError(err?.message || "deposit failed"); throw err; }
-    finally { setLoading(false); }
+    } catch (err) {
+      setError(err?.shortMessage || err?.message || "deposit failed");
+      throw err;
+    } finally {
+      setLoading(false);
+    }
+  }, [signer, address]);
+
+  const withdraw = useCallback(async (sharesAmount, { onStep } = {}) => {
+    setLoading(true); setError(null); setTxHash(null);
+    try {
+      if (!signer || !address) throw new Error("Connect wallet first.");
+      await ensureBaseChain(signer.provider);
+
+      // Vault shares mirror USDC's 6 decimals
+      const shares = ethers.parseUnits(sharesAmount.toString(), 6);
+
+      onStep?.("withdrawing");
+      const vault = new ethers.Contract(CONTRACTS.YieldPilotVault, ABI_YIELD_PILOT, signer);
+      // redeem(shares, receiver, owner) — caller is owner, redeems to themselves
+      const tx = await vault.redeem(shares, address, address);
+      setTxHash(tx.hash);
+      await tx.wait();
+      return tx.hash;
+    } catch (err) {
+      setError(err?.shortMessage || err?.message || "withdraw failed");
+      throw err;
+    } finally {
+      setLoading(false);
+    }
   }, [signer, address]);
 
   const getPosition = useCallback(async (addr) => {
@@ -285,7 +353,15 @@ export function useVaultDeposit() {
     } catch (err) { console.error("getPosition error:", err); return null; }
   }, []);
 
-  return { deposit, getPosition, loading, error, txHash };
+  const getUsdcAllowance = useCallback(async (addr) => {
+    if (!addr) return 0n;
+    try {
+      const usdc = new ethers.Contract(USDC_BASE, ABI_ERC20, getReadProvider());
+      return await usdc.allowance(addr, CONTRACTS.YieldPilotVault);
+    } catch (err) { console.error("getUsdcAllowance error:", err); return 0n; }
+  }, []);
+
+  return { deposit, withdraw, getPosition, getUsdcAllowance, loading, error, txHash };
 }
 
 // ─────────────────────────────────────────────────────────────

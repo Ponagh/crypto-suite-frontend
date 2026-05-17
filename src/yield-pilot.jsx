@@ -325,24 +325,31 @@ export default function YieldPilot({ apiUrl }) {
 
   const handleDeposit = async (amount) => {
     if (!deposit) return setTxStatus({ type: "error", message: "Wallet hook not available" });
-    setTxStatus({ type: "pending", message: "Approve & deposit pending..." });
+    setTxStatus({ type: "pending", message: "Preparing deposit..." });
     try {
-      const txHash = await deposit(amount);
+      const txHash = await deposit(amount, {
+        onStep: (step) => {
+          if (step === "approving")  setTxStatus({ type: "pending", message: "Approving USDC (1 of 2)..." });
+          if (step === "depositing") setTxStatus({ type: "pending", message: "Depositing into vault (2 of 2)..." });
+        },
+      });
       setTxStatus({ type: "success", message: `✓ Deposited — tx: ${txHash?.slice(0, 12)}...` });
       await fetchVaultData();
       setTimeout(() => { setModalOpen(false); setTxStatus(null); }, 2500);
-    } catch (e) { setTxStatus({ type: "error", message: e.message || "Deposit failed" }); }
+    } catch (e) { setTxStatus({ type: "error", message: e.shortMessage || e.message || "Deposit failed" }); }
   };
 
   const handleWithdraw = async (shares) => {
     if (!withdraw) return setTxStatus({ type: "error", message: "Wallet hook not available" });
     setTxStatus({ type: "pending", message: "Withdrawal pending..." });
     try {
-      const txHash = await withdraw(shares);
+      const txHash = await withdraw(shares, {
+        onStep: () => setTxStatus({ type: "pending", message: "Redeeming shares..." }),
+      });
       setTxStatus({ type: "success", message: `✓ Withdrawn — tx: ${txHash?.slice(0, 12)}...` });
       await fetchVaultData();
       setTimeout(() => { setModalOpen(false); setTxStatus(null); }, 2500);
-    } catch (e) { setTxStatus({ type: "error", message: e.message || "Withdraw failed" }); }
+    } catch (e) { setTxStatus({ type: "error", message: e.shortMessage || e.message || "Withdraw failed" }); }
   };
 
   const userValueUsd = userPosition && vaultStats
