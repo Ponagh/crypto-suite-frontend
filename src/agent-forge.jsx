@@ -1637,6 +1637,10 @@ function WalletFundingPanel({ agent, apiUrl }) {
   const [provisioning, setProvisioning] = useState(false);
   const [expanded, setExpanded]         = useState(agent.mode === "live");
 
+  // Withdraw-funds state
+  const [withdrawing, setWithdrawing] = useState(false);
+  const [withdrawResult, setWithdrawResult] = useState(null); // { ok, message, tx_hash?, amount_usd? } | null
+
   const fetchPolicy = useCallback(() => {
     if (!agent?.id || !apiUrl) return;
     fetch(`${apiUrl}/api/agents/${agent.id}/policy`)
@@ -1668,6 +1672,44 @@ function WalletFundingPanel({ agent, apiUrl }) {
       else if (data.error) { alert("Provision failed: " + data.error); }
     } catch (err) { alert("Provision failed: " + err.message); }
     finally { setProvisioning(false); }
+  };
+
+  const handleWithdraw = async () => {
+    if (!address || withdrawing) return;
+    const confirmed = window.confirm(
+      `Withdraw ALL USDC from this agent's CDP wallet to your wallet (${address.slice(0, 6)}...${address.slice(-4)})?\n\n` +
+      `• The agent will be halted after withdrawal.\n` +
+      `• ETH gas reserve will remain in the CDP wallet.\n` +
+      `• This action cannot be undone via the UI.`
+    );
+    if (!confirmed) return;
+
+    setWithdrawing(true);
+    setWithdrawResult(null);
+    try {
+      const res = await fetch(`${apiUrl}/api/agents/${agent.id}/withdraw-funds`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Wallet-Address": address.toLowerCase() },
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        setWithdrawResult({ ok: false, message: data.error || `HTTP ${res.status}` });
+      } else if (Number(data.amount_usd) === 0) {
+        setWithdrawResult({ ok: true, message: "CDP wallet had no USDC to withdraw.", amount_usd: 0 });
+      } else {
+        setWithdrawResult({
+          ok: true,
+          message: `✓ Withdrew ${data.amount_usd.toFixed(2)} USDC. Agent halted.`,
+          tx_hash: data.tx_hash,
+          basescan_url: data.basescan_url,
+          amount_usd: data.amount_usd,
+        });
+      }
+    } catch (err) {
+      setWithdrawResult({ ok: false, message: err.message || "Withdrawal failed" });
+    } finally {
+      setWithdrawing(false);
+    }
   };
 
   const isLive        = agent.mode === "live";
@@ -1811,6 +1853,57 @@ function WalletFundingPanel({ agent, apiUrl }) {
                 <span style={{ padding: "3px 8px", background: "rgba(0,82,255,0.1)", border: "1px solid rgba(0,82,255,0.3)", color: "#6080ff", fontSize: 9, letterSpacing: "0.1em" }}>BASE MAINNET</span>
                 <span style={{ padding: "3px 8px", background: "rgba(0,255,136,0.06)", border: "1px solid rgba(0,255,136,0.15)", color: "#00ff88", fontSize: 9, letterSpacing: "0.1em" }}>USDC ONLY</span>
                 <span style={{ padding: "3px 8px", background: "rgba(0,0,0,0.3)", border: "1px solid #1a1a2e", color: "#6a6a82", fontSize: 9, letterSpacing: "0.1em" }}>CDP ISOLATED</span>
+              </div>
+
+              {/* ── Withdraw funds — escape hatch ──────────────────────── */}
+              <div style={{ marginTop: 20, paddingTop: 14, borderTop: "1px dashed rgba(255,149,0,0.25)" }}>
+                <div style={{ fontSize: 9, color: "#6a6a82", letterSpacing: "0.15em", marginBottom: 6 }}>
+                  RECOVER_FUNDS
+                </div>
+                <div style={{ fontSize: 10, color: "#8a8a9e", lineHeight: 1.6, marginBottom: 10 }}>
+                  Drains all USDC from the CDP wallet back to your wallet
+                  (<span style={{ color: "#dcdce5" }}>{address ? `${address.slice(0,6)}...${address.slice(-4)}` : "—"}</span>).
+                  Agent will be halted after withdrawal.
+                </div>
+                <button
+                  onClick={handleWithdraw}
+                  disabled={withdrawing || !address}
+                  style={{
+                    width: "100%",
+                    padding: "10px 14px",
+                    background: withdrawing ? "rgba(255,149,0,0.08)" : "rgba(255,149,0,0.12)",
+                    border: "1px solid #ff9500",
+                    color: "#ff9500",
+                    fontFamily: '"JetBrains Mono", monospace',
+                    fontSize: 11, fontWeight: 700, letterSpacing: "0.15em",
+                    cursor: (withdrawing || !address) ? "not-allowed" : "pointer",
+                    opacity: (withdrawing || !address) ? 0.6 : 1,
+                  }}
+                >
+                  {withdrawing ? "WITHDRAWING..." : "↩ WITHDRAW USDC TO MY WALLET"}
+                </button>
+                {withdrawResult && (
+                  <div style={{
+                    marginTop: 10, padding: "10px 12px",
+                    background: withdrawResult.ok ? "rgba(0,220,130,0.08)" : "rgba(255,68,102,0.10)",
+                    border: `1px solid ${withdrawResult.ok ? "rgba(0,220,130,0.35)" : "rgba(255,68,102,0.4)"}`,
+                    color: withdrawResult.ok ? "#00dc82" : "#ff4466",
+                    fontSize: 10, fontFamily: '"JetBrains Mono", monospace',
+                    wordBreak: "break-all", lineHeight: 1.6,
+                  }}>
+                    <div>{withdrawResult.message}</div>
+                    {withdrawResult.basescan_url && (
+                      <a
+                        href={withdrawResult.basescan_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{ display: "inline-block", marginTop: 6, color: "#00dc82", textDecoration: "underline" }}
+                      >
+                        ↗ View on Basescan
+                      </a>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           )}
