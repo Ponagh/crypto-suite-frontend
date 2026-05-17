@@ -117,9 +117,15 @@ function Spinner({ size = 14 }) {
 }
 
 // ─── Modal ───────────────────────────────────────────────────────────────────
-function DepositModal({ open, onClose, userUsdcBalance, userPosition, pricePerShare, onDeposit, onWithdraw, txStatus }) {
+function DepositModal({ open, onClose, userUsdcBalance, userPosition, pricePerShare, onDeposit, onWithdraw, txStatus, onClearStatus }) {
   const [mode, setMode] = useState("deposit");
   const [amount, setAmount] = useState("");
+
+  // Clear any stale txStatus from a previous attempt every time the modal opens
+  useEffect(() => {
+    if (open) onClearStatus?.();
+  }, [open, onClearStatus]);
+
   if (!open) return null;
 
   const userUsdc = num(userUsdcBalance);
@@ -131,6 +137,18 @@ function DepositModal({ open, onClose, userUsdcBalance, userPosition, pricePerSh
     if (!amt || amt <= 0) return;
     if (mode === "deposit") onDeposit(amt);
     else onWithdraw(amt);
+  };
+
+  const handleModeChange = (m) => {
+    setMode(m);
+    setAmount("");
+    onClearStatus?.();
+  };
+
+  const handleAmountChange = (v) => {
+    setAmount(v);
+    // Clear errors/success the moment the user starts changing inputs again
+    if (txStatus && txStatus.type !== "pending") onClearStatus?.();
   };
 
   return (
@@ -145,7 +163,7 @@ function DepositModal({ open, onClose, userUsdcBalance, userPosition, pricePerSh
       }} onClick={e => e.stopPropagation()}>
         <div style={{ display: "flex", gap: 4, marginBottom: 20, padding: 3, background: "#06060b", borderRadius: 6 }}>
           {["deposit", "withdraw"].map(m => (
-            <button key={m} onClick={() => { setMode(m); setAmount(""); }} style={{
+            <button key={m} onClick={() => handleModeChange(m)} style={{
               flex: 1, padding: "8px 12px", fontSize: 11, fontWeight: 600,
               fontFamily: "monospace", letterSpacing: "0.06em", textTransform: "uppercase",
               background: mode === m ? "#3366ff" : "transparent",
@@ -158,7 +176,7 @@ function DepositModal({ open, onClose, userUsdcBalance, userPosition, pricePerSh
           {mode === "deposit" ? "AMOUNT (USDC)" : "SHARES TO WITHDRAW"}
         </div>
         <div style={{ position: "relative", marginBottom: 8 }}>
-          <input type="number" value={amount} onChange={e => setAmount(e.target.value)}
+          <input type="number" value={amount} onChange={e => handleAmountChange(e.target.value)}
             placeholder="0.00"
             style={{
               width: "100%", padding: "14px 70px 14px 14px", fontSize: 20,
@@ -167,7 +185,7 @@ function DepositModal({ open, onClose, userUsdcBalance, userPosition, pricePerSh
               border: "1px solid #1a1a2e", borderRadius: 6, boxSizing: "border-box",
             }} />
           <button
-            onClick={() => setAmount(mode === "deposit" ? userUsdc.toFixed(2) : userShares.toFixed(4))}
+            onClick={() => handleAmountChange(mode === "deposit" ? userUsdc.toFixed(2) : userShares.toFixed(4))}
             style={{
               position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)",
               padding: "4px 10px", fontSize: 9, fontFamily: "monospace", fontWeight: 700,
@@ -603,6 +621,7 @@ export default function YieldPilot({ apiUrl }) {
       <DepositModal
         open={modalOpen}
         onClose={() => { setModalOpen(false); setTxStatus(null); }}
+        onClearStatus={() => setTxStatus(null)}
         userUsdcBalance={userUsdcBalance}
         userPosition={userPosition}
         pricePerShare={vaultStats?.pricePerShare}
