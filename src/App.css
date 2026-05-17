@@ -720,3 +720,83 @@ body {
   .app-nav-tab { padding: 7px 10px; font-size: 11px; gap: 4px; }
   .app-nav-label { display: none; }
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   CONNECT BUTTON — Wallet pill in top-right nav
+   Matches the pre-regression design: teal/cyan outlined pill with status dot
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.connect-btn-wrapper {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.connect-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 16px;
+  border-radius: 100px;
+  background: transparent;
+  border: 1px solid var(--blue-border);
+  color: var(--blue);
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s, box-shadow 0.2s, color 0.2s;
+}
+
+.connect-btn:hover {
+  background: var(--blue-bg);
+  border-color: var(--blue);
+  box-shadow: 0 0 16px var(--blue-glow);
+}
+
+.connect-btn--connected {
+  border-color: rgba(34,197,94,0.45);
+  color: var(--green);
+  background: var(--green-bg);
+}
+
+.connect-btn--connected:hover {
+  background: rgba(34,197,94,0.15);
+  border-color: var(--green);
+  box-shadow: 0 0 16px rgba(34,197,94,0.25);
+}
+
+.connect-btn__dot {
+  width: 6px;
+  height: 6px;
+  background: var(--green);
+  border-radius: 50%;
+  box-shadow: 0 0 6px var(--green);
+  animation: pulse-dot 2s infinite;
+}
+
+.connect-btn--loading {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.connect-btn--wrong-chain {
+  border-color: rgba(245,158,11,0.45);
+  color: var(--amber);
+  background: var(--amber-bg);
+}
+
+.connect-btn--wrong-chain:hover {
+  background: rgba(245,158,11,0.15);
+  border-color: var(--amber);
+}
+
+.connect-btn__error {
+  font-size: 10px;
+  color: var(--red);
+  font-family: var(--mono);
+  margin: 0;
+}

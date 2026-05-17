@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ConnectButton, useWallet } from './wallet-integration';
+import { ConnectButton, useWallet, WalletProvider } from './wallet-integration';
 import BaseAlpha from './apps/base-alpha/BaseAlpha';
 import YieldPilot from './yield-pilot';
 import AgentForge from './agent-forge';
@@ -19,7 +19,7 @@ function AppContent() {
   const [activeApp, setActiveApp] = useState('alpha');
   const { address, connected: isConnected } = useWallet();
 
-  const isAdmin = address && address.toLowerCase() === ADMIN_WALLET;
+  const isAdmin = !!(address && address.toLowerCase() === ADMIN_WALLET);
 
   const APPS = isAdmin
     ? [...BASE_APPS, { id: 'admin', label: 'Admin', icon: '⚙️' }]
@@ -63,7 +63,9 @@ function AppContent() {
 
 function App() {
   return (
-    <AppContent />
+    <WalletProvider>
+      <AppContent />
+    </WalletProvider>
   );
 }
 

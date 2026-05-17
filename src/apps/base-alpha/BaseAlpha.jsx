@@ -120,6 +120,11 @@ export default function BaseAlpha({ apiUrl }) {
     return () => clearInterval(interval);
   }, [fetchAlerts, fetchTrending, fetchSubscription, fetchTrackedWallets]);
 
+  // ─── Force tab back to "feed" if user loses admin access ──
+  useEffect(() => {
+    if (tab === "wallets" && !isAdminView) setTab("feed");
+  }, [tab, isAdminView]);
+
   // ─── Filter alerts ─────────────────────────────────────────
   const filteredAlerts = filter === "all" ? alerts
     : filter === "bullish" ? alerts.filter(a => ["bought", "accumulated", "bridged_in", "lp", "staked"].includes(a.action))
@@ -251,12 +256,12 @@ export default function BaseAlpha({ apiUrl }) {
           </div>
         </div>
 
-        {/* Tabs — dynamic wallet count */}
+        {/* Tabs — dynamic wallet count; Tracked Wallets is admin-only */}
         <div style={S.tabs}>
           {[
             { key: "feed", label: "Alert Feed" },
             { key: "trending", label: "Trending" },
-            { key: "wallets", label: `Tracked Wallets (${walletCount || "..."})` },
+            ...(isAdminView ? [{ key: "wallets", label: `Tracked Wallets (${walletCount || "..."})` }] : []),
           ].map(t => (
             <button key={t.key} style={S.tab(tab === t.key)} onClick={() => setTab(t.key)}>
               {t.label}

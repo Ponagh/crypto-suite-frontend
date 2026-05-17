@@ -1542,13 +1542,39 @@ function WalletFundingPanel({ agent, apiUrl }) {
             <div>
               <div style={{ padding: 12, background: "rgba(255,45,146,0.04)", border: "1px solid rgba(255,45,146,0.2)", fontSize: 10, color: "#6a6a82", lineHeight: 1.7 }}>
                 <div style={{ color: "#ff2d92", fontWeight: 700, marginBottom: 6 }}>▲ LIVE MODE — WALLET PENDING</div>
-                This agent is in LIVE mode. A dedicated CDP wallet will be
-                automatically created and funded on the first live trade attempt.
+                This agent is in LIVE mode but no on-chain CDP wallet has been
+                provisioned yet. You can provision it now to deposit funds, or
+                let the runner provision lazily on the first live trade.
                 <div style={{ marginTop: 10, color: "#dcdce5" }}>
-                  The wallet address will appear here after the first tick executes.
-                  Make sure the agent is running and check back in 2-3 minutes.
+                  Provisioning is a one-shot, idempotent CDP call. Same agent
+                  name = same deterministic wallet address.
                 </div>
               </div>
+              <button
+                onClick={handleProvision}
+                disabled={provisioning || !address}
+                style={{
+                  marginTop: 12,
+                  width: "100%",
+                  padding: "10px 14px",
+                  background: provisioning ? "rgba(255,45,146,0.08)" : "rgba(255,45,146,0.15)",
+                  border: "1px solid #ff2d92",
+                  color: "#ff2d92",
+                  fontFamily: '"JetBrains Mono", monospace',
+                  fontSize: 11,
+                  fontWeight: 700,
+                  letterSpacing: "0.15em",
+                  cursor: provisioning ? "progress" : "pointer",
+                  opacity: provisioning || !address ? 0.6 : 1,
+                }}
+              >
+                {provisioning ? "PROVISIONING..." : "⚡ PROVISION WALLET NOW"}
+              </button>
+              {!address && (
+                <div style={{ marginTop: 8, fontSize: 9, color: "#6a6a82", textAlign: "center" }}>
+                  Connect wallet to provision
+                </div>
+              )}
             </div>
           )}
 
