@@ -1734,7 +1734,7 @@ function DetailBox({ label, value, sub, color = "#dcdce5" }) {
 
 // ─── Main ───────────────────────────────────────────────────────────────────
 export default function AgentForge({ apiUrl }) {
-  const { address, isConnected, signer } = useWallet() || {};
+  const { address, connected: isConnected, signer } = useWallet() || {};
   const [subscription, setSubscription] = useState({ tier: 0, expiry: 0, agentsUsed: 0, agentsAllowed: 1 });
   const [agents, setAgents] = useState([]);
   const [range, setRange] = useState("all");        // Wave 1: chart time horizon — 24h | 7d | 30d | all
