@@ -118,7 +118,7 @@ export function useWallet() {
     };
   }, [disconnect]);
 
-  return { address, chainId, connected, loading, error, connect, disconnect };
+  return { address, chainId, connected, isConnected: connected, loading, error, connect, disconnect };
 }
 
 // ─────────────────────────────────────────────────────────────
