@@ -1209,7 +1209,128 @@ function PolicyTabHistory({ history, violations, accentColor }) {
   );
 }
 
-function AgentCard({ agent, onPause, onResume, onDelete, onInspect, onEditPolicy, onHalt, onUnhalt, apiUrl }) {
+// ─── Live signal strip (compact, on the card) ──────────────────────────────
+// Renders strategy-aware live data inline on the agent card. For Sentiment
+// Long agents, shows the four Hyperliquid-tracked coins (ETH, BTC, AERO,
+// MORPHO) with sentiment arrow + confidence %. For other strategies, renders
+// nothing (the rest of the card already shows everything that matters for
+// DCA/Grid/etc.).
+//
+// `signals` is the data shape from /api/hyperliquid/signals:
+//   { signals: { ETH: {price, sentiment, confidence, funding}, ... }, stale }
+function StrategyMiniRow({ agent, signals }) {
+  // Only Sentiment Long agents care about HL funding-rate signals today.
+  // We match loosely on strategy name to handle either "Sentiment Long"
+  // or future variants ("Sentiment Long V2", etc.).
+  const isSentimentLong =
+    (agent.strategy || "").toLowerCase().includes("sentiment") ||
+    (agent.template_id || "").toLowerCase().includes("sentiment");
+
+  if (!isSentimentLong) return null;
+
+  const sigMap = signals?.signals || {};
+  // HL exposes BTC under "WBTC" in our local mapping; the keys we care about
+  // are exactly these four. Render even if some are missing — show "—".
+  const tracked = ["ETH", "WBTC", "AERO", "MORPHO"];
+  const display = tracked.map(local => {
+    const s = sigMap[local];
+    const label = local === "WBTC" ? "BTC" : local;
+    if (!s) return { label, sentiment: null, confidence: 0, arrow: "·", color: "#6a6a82" };
+    const bull = s.sentiment?.includes("BULLISH");
+    const bear = s.sentiment?.includes("BEARISH");
+    return {
+      label,
+      sentiment: s.sentiment,
+      confidence: Math.round((s.confidence || 0) * 100),
+      arrow: bull ? "↑" : bear ? "↓" : "·",
+      color: bull ? "#00ff88" : bear ? "#ff2d92" : "#6a6a82",
+    };
+  });
+
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
+        <span style={{ fontSize: 8, color: "#6a6a82", fontFamily: '"JetBrains Mono", monospace', letterSpacing: "0.12em" }}>
+          LIVE_SIGNALS · HYPERLIQUID
+        </span>
+        {signals?.stale && (
+          <span style={{ fontSize: 7, color: "#ff9500", fontFamily: '"JetBrains Mono", monospace', letterSpacing: "0.1em" }}>STALE</span>
+        )}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 6, padding: "8px 10px", background: "rgba(5,5,12,0.5)", border: "1px solid #1a1a2e" }}>
+        {display.map(d => (
+          <div key={d.label} style={{ textAlign: "center" }}>
+            <div style={{ fontSize: 9, color: "#8a8a9e", fontFamily: '"JetBrains Mono", monospace', letterSpacing: "0.05em", marginBottom: 2 }}>{d.label}</div>
+            <div style={{ fontSize: 10, fontWeight: 700, color: d.color, fontFamily: '"JetBrains Mono", monospace' }}>
+              {d.arrow} {d.sentiment ? `${d.confidence}` : "—"}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── Live signal detail panel (verbose, in the inspect drawer) ─────────────
+// Used inside AgentDetailDrawer. Same data as StrategyMiniRow but renders a
+// full card per coin with price, sentiment label, funding rate, and 8h
+// annualized projection. Only renders for Sentiment Long agents.
+function LiveSignalsPanel({ agent, signals }) {
+  const isSentimentLong =
+    (agent.strategy || "").toLowerCase().includes("sentiment") ||
+    (agent.template_id || "").toLowerCase().includes("sentiment");
+  if (!isSentimentLong) return null;
+
+  const sigMap = signals?.signals || {};
+  const tracked = ["ETH", "WBTC", "AERO", "MORPHO"];
+  const cards = tracked.map(local => ({ key: local, label: local === "WBTC" ? "BTC" : local, sig: sigMap[local] }));
+
+  const fmtPrice = (p) => {
+    if (!p) return "—";
+    if (p > 1000) return "$" + p.toLocaleString(undefined, { maximumFractionDigits: 0 });
+    if (p > 1) return "$" + p.toFixed(2);
+    return "$" + p.toFixed(4);
+  };
+
+  return (
+    <div style={{ marginBottom: 22 }}>
+      <div style={{ fontSize: 10, letterSpacing: "0.2em", color: "#6a6a82", fontFamily: '"JetBrains Mono", monospace', marginBottom: 10, display: "flex", justifyContent: "space-between" }}>
+        <span>LIVE_SIGNALS <span style={{ color: "#8a8a9e" }}>· hyperliquid perp feed</span></span>
+        {signals?.stale && <span style={{ color: "#ff9500" }}>STALE</span>}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+        {cards.map(c => {
+          const s = c.sig;
+          const bull = s?.sentiment?.includes("BULLISH");
+          const bear = s?.sentiment?.includes("BEARISH");
+          const color = bull ? "#00ff88" : bear ? "#ff2d92" : "#8a8a9e";
+          return (
+            <div key={c.key} style={{ padding: 12, background: "rgba(5,5,12,0.8)", border: `1px solid ${s ? color + "33" : "#1a1a2e"}` }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 }}>
+                <span style={{ fontSize: 11, fontWeight: 700, color: "#dcdce5", fontFamily: '"JetBrains Mono", monospace', letterSpacing: "0.05em" }}>{c.label}</span>
+                <span style={{ fontSize: 10, color, fontFamily: '"JetBrains Mono", monospace' }}>{fmtPrice(s?.price)}</span>
+              </div>
+              {s ? (
+                <>
+                  <div style={{ fontSize: 9, color, fontFamily: '"JetBrains Mono", monospace', letterSpacing: "0.05em", marginBottom: 4 }}>
+                    {bull ? "↑" : bear ? "↓" : "·"} {s.sentiment.replace("_", " ")} · {Math.round((s.confidence || 0) * 100)}%
+                  </div>
+                  <div style={{ fontSize: 9, color: "#6a6a82", fontFamily: '"JetBrains Mono", monospace' }}>
+                    funding {(s.funding * 100).toFixed(4)}%/h ({(s.fundingAnnualized * 100).toFixed(1)}%/y)
+                  </div>
+                </>
+              ) : (
+                <div style={{ fontSize: 9, color: "#6a6a82", fontFamily: '"JetBrains Mono", monospace' }}>no signal data</div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function AgentCard({ agent, onPause, onResume, onDelete, onInspect, onEditPolicy, onHalt, onUnhalt, apiUrl, signals }) {
   const pnlColor = agent.pnl >= 0 ? "#00ff88" : "#ff2d92";
   const canToggle = agent.status !== "stopped";
   const deployedAgo = Math.floor((Date.now() - agent.deployedAtMs) / 60000);
@@ -1279,6 +1400,9 @@ function AgentCard({ agent, onPause, onResume, onDelete, onInspect, onEditPolicy
         </div>
         <TradeScatter trades={agent.trades} color={agent.color} />
       </div>
+
+      {/* Strategy-aware live signals (renders for Sentiment Long, no-op otherwise) */}
+      <StrategyMiniRow agent={agent} signals={signals} />
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
         <ConfidenceMini series={agent.series} currentScore={agent.confidence_score} color={agent.color} />
@@ -1933,7 +2057,7 @@ function WalletFundingPanel({ agent, apiUrl }) {
   );
 }
 
-function AgentDetailDrawer({ agent, open, onClose, apiUrl }) {
+function AgentDetailDrawer({ agent, open, onClose, apiUrl, signals }) {
   const [logs, setLogs] = useState([]);
   useEffect(() => {
     if (!agent || !apiUrl) return;
@@ -1977,6 +2101,11 @@ function AgentDetailDrawer({ agent, open, onClose, apiUrl }) {
           <DetailBox label="PNL" value={fmtUsd(agent.pnl)} sub={fmtPct(agent.pnl_pct)} color={agent.pnl >= 0 ? "#00ff88" : "#ff2d92"} />
         </div>
         <WalletFundingPanel agent={agent} apiUrl={apiUrl} />
+
+        {/* Strategy-aware live signal feed — renders for Sentiment Long agents,
+            no-op for other strategies. Shows the same HL data as the inline
+            mini row, but in a more readable grid with funding rates. */}
+        <LiveSignalsPanel agent={agent} signals={signals} />
 
         <div style={{ marginBottom: 22 }}>
           <div style={{ fontSize: 10, letterSpacing: "0.2em", color: "#6a6a82", fontFamily: '"JetBrains Mono", monospace', marginBottom: 10 }}>LIVE_CONFIG</div>
@@ -2047,6 +2176,30 @@ export default function AgentForge({ apiUrl }) {
   const [pendingDeploy, setPendingDeploy] = useState(null);
   const [signing, setSigning] = useState(false);
   const [deploying, setDeploying] = useState(false);
+
+  // ─── Live HL signals (shared across all Sentiment Long cards) ────────────
+  // Single 60s poll feeds the strip on every agent card + the inspect drawer.
+  // Stays null until the first successful fetch so panels can render a
+  // "loading" state instead of an empty grid.
+  const [liveSignals, setLiveSignals] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    async function pullSignals() {
+      try {
+        const res = await fetch(`${apiUrl}/api/hyperliquid/signals`, { cache: "no-store" });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (cancelled) return;
+        // Endpoint shape: { signals: { ETH: {...}, WBTC: {...}, ... }, updatedAt, stale }
+        if (data && data.signals && typeof data.signals === "object") {
+          setLiveSignals(data);
+        }
+      } catch { /* silent — strip just stays empty until next attempt */ }
+    }
+    pullSignals();
+    const handle = setInterval(pullSignals, 60_000);
+    return () => { cancelled = true; clearInterval(handle); };
+  }, [apiUrl]);
 
   const fetchSubscription = useCallback(async () => {
     try {
@@ -2377,6 +2530,7 @@ export default function AgentForge({ apiUrl }) {
               onHalt={handleHalt}
               onUnhalt={handleUnhalt}
               apiUrl={apiUrl}
+              signals={liveSignals}
             />
           ))}
         </div>
@@ -2384,7 +2538,7 @@ export default function AgentForge({ apiUrl }) {
 
       <CreateAgentModal open={createOpen} onClose={() => setCreateOpen(false)} onDeploy={handleStartDeploy} currentSlots={agents.length} maxSlots={tierMeta.allowed} isAllowlisted={isAllowlisted} deploying={deploying} />
       <RiskAgreementModal open={riskOpen} template={pendingDeploy?.template} capital={Number(pendingDeploy?.config?.capital) || 500} mode={pendingDeploy?.mode} onSign={handleSignAgreement} onCancel={() => { setRiskOpen(false); setPendingDeploy(null); }} signing={signing} />
-      <AgentDetailDrawer agent={inspectAgent} open={!!inspectAgent} onClose={() => setInspectAgent(null)} apiUrl={apiUrl} />
+      <AgentDetailDrawer agent={inspectAgent} open={!!inspectAgent} onClose={() => setInspectAgent(null)} apiUrl={apiUrl} signals={liveSignals} />
       <EditPolicyModal
         open={!!policyAgent}
         agent={policyAgent}
