@@ -1677,9 +1677,10 @@ function WalletFundingPanel({ agent, apiUrl }) {
   const handleWithdraw = async () => {
     if (!address || withdrawing) return;
     const confirmed = window.confirm(
-      `Withdraw ALL USDC from this agent's CDP wallet to your wallet (${address.slice(0, 6)}...${address.slice(-4)})?\n\n` +
+      `Withdraw ALL token balances from this agent's CDP wallet to your wallet (${address.slice(0, 6)}...${address.slice(-4)})?\n\n` +
+      `• All ERC20 tokens with non-zero balance will be transferred (USDC, WETH, cbBTC, etc.).\n` +
+      `• Native ETH gas reserve will remain in the CDP wallet.\n` +
       `• The agent will be halted after withdrawal.\n` +
-      `• ETH gas reserve will remain in the CDP wallet.\n` +
       `• This action cannot be undone via the UI.`
     );
     if (!confirmed) return;
@@ -1692,17 +1693,31 @@ function WalletFundingPanel({ agent, apiUrl }) {
         headers: { "Content-Type": "application/json", "X-Wallet-Address": address.toLowerCase() },
       });
       const data = await res.json();
+
       if (!res.ok || data.error) {
         setWithdrawResult({ ok: false, message: data.error || `HTTP ${res.status}` });
-      } else if (Number(data.amount_usd) === 0) {
-        setWithdrawResult({ ok: true, message: "CDP wallet had no USDC to withdraw.", amount_usd: 0 });
+      } else if (!Array.isArray(data.transfers) || data.transfers.length === 0) {
+        setWithdrawResult({ ok: true, message: data.message || "CDP wallet had no token balances to withdraw." });
       } else {
+        // Summarize successes vs failures
+        const successes = data.transfers.filter(t => t.ok);
+        const failures = data.transfers.filter(t => !t.ok);
+
+        const summary = successes
+          .map(t => `${t.amount.toFixed(t.symbol === "WETH" || t.symbol === "AERO" ? 6 : 2)} ${t.symbol}`)
+          .join(", ");
+
+        const message = successes.length > 0
+          ? `✓ Withdrew ${summary}. Agent halted.`
+          : `Withdrawal failed for all ${data.transfers.length} token(s).`;
+
         setWithdrawResult({
-          ok: true,
-          message: `✓ Withdrew ${data.amount_usd.toFixed(2)} USDC. Agent halted.`,
-          tx_hash: data.tx_hash,
-          basescan_url: data.basescan_url,
-          amount_usd: data.amount_usd,
+          ok: successes.length > 0,
+          message,
+          transfers: data.transfers,
+          // Link to the agent's wallet activity (shows all transfers)
+          basescan_url: cdpAddress ? `https://basescan.org/address/${cdpAddress}` : null,
+          failures: failures.length > 0 ? failures : null,
         });
       }
     } catch (err) {
@@ -1861,9 +1876,9 @@ function WalletFundingPanel({ agent, apiUrl }) {
                   RECOVER_FUNDS
                 </div>
                 <div style={{ fontSize: 10, color: "#8a8a9e", lineHeight: 1.6, marginBottom: 10 }}>
-                  Drains all USDC from the CDP wallet back to your wallet
+                  Drains all ERC20 token balances (USDC, WETH, cbBTC, AERO…) from the CDP wallet back to your wallet
                   (<span style={{ color: "#dcdce5" }}>{address ? `${address.slice(0,6)}...${address.slice(-4)}` : "—"}</span>).
-                  Agent will be halted after withdrawal.
+                  Native ETH gas reserve stays. Agent will be halted after withdrawal.
                 </div>
                 <button
                   onClick={handleWithdraw}
@@ -1880,7 +1895,7 @@ function WalletFundingPanel({ agent, apiUrl }) {
                     opacity: (withdrawing || !address) ? 0.6 : 1,
                   }}
                 >
-                  {withdrawing ? "WITHDRAWING..." : "↩ WITHDRAW USDC TO MY WALLET"}
+                  {withdrawing ? "WITHDRAWING..." : "↩ WITHDRAW ALL TOKENS TO MY WALLET"}
                 </button>
                 {withdrawResult && (
                   <div style={{
@@ -1892,6 +1907,11 @@ function WalletFundingPanel({ agent, apiUrl }) {
                     wordBreak: "break-all", lineHeight: 1.6,
                   }}>
                     <div>{withdrawResult.message}</div>
+                    {withdrawResult.failures && withdrawResult.failures.length > 0 && (
+                      <div style={{ marginTop: 6, fontSize: 9, color: "#ff9500" }}>
+                        Failed: {withdrawResult.failures.map(f => `${f.symbol} (${f.error?.slice(0, 40) || "unknown"})`).join(", ")}
+                      </div>
+                    )}
                     {withdrawResult.basescan_url && (
                       <a
                         href={withdrawResult.basescan_url}
@@ -1899,7 +1919,7 @@ function WalletFundingPanel({ agent, apiUrl }) {
                         rel="noopener noreferrer"
                         style={{ display: "inline-block", marginTop: 6, color: "#00dc82", textDecoration: "underline" }}
                       >
-                        ↗ View on Basescan
+                        ↗ View wallet activity on Basescan
                       </a>
                     )}
                   </div>
