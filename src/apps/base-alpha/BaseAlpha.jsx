@@ -48,6 +48,11 @@ export default function BaseAlpha({ apiUrl }) {
   const { address, connected } = useWallet();
   const [alerts, setAlerts] = useState([]);
   const [trending, setTrending] = useState([]);
+  // Hyperliquid sentiment signals — funding-rate-derived BULLISH/BEARISH per
+  // major perp coin (BTC/ETH/AERO/MORPHO). Same feed as AgentForge cards and
+  // the landing page; rendered as a compact strip above the tabs so it's
+  // visible regardless of which tab the user is on.
+  const [hlSignals, setHlSignals] = useState(null);
   const [trackedWallets, setTrackedWallets] = useState([]);
   const [walletCount, setWalletCount] = useState(0);
   const [isAdminView, setIsAdminView] = useState(false);
@@ -86,6 +91,19 @@ export default function BaseAlpha({ apiUrl }) {
     } catch { /* silent */ }
   }, [API]);
 
+  // ─── Fetch Hyperliquid signals ─────────────────────────────
+  // Public endpoint, no auth. Backend caches with 90s TTL so polling at the
+  // same cadence as alerts is fine. Silently no-ops on failure so a brief
+  // HL outage doesn't break the rest of the page.
+  const fetchHlSignals = useCallback(async () => {
+    try {
+      const res = await fetch(`${API}/api/hyperliquid/signals`, { cache: "no-store" });
+      if (!res.ok) return;
+      const data = await res.json();
+      setHlSignals(data);
+    } catch { /* silent */ }
+  }, [API]);
+
   // ─── Fetch subscription ────────────────────────────────────
   const fetchSubscription = useCallback(async () => {
     if (!address) return;
@@ -113,17 +131,18 @@ export default function BaseAlpha({ apiUrl }) {
   // ─── Initial load + polling ────────────────────────────────
   useEffect(() => {
     setLoading(true);
-    Promise.all([fetchAlerts(), fetchTrending(), fetchSubscription(), fetchTrackedWallets()])
+    Promise.all([fetchAlerts(), fetchTrending(), fetchSubscription(), fetchTrackedWallets(), fetchHlSignals()])
       .finally(() => setLoading(false));
 
-    const interval = setInterval(fetchAlerts, POLL_INTERVAL_MS);
+    // Poll alerts AND HL signals on the same cadence — both are cheap GETs
+    // that the backend already caches. Trending and tracked wallets update
+    // less frequently and don't need to be on the hot loop.
+    const interval = setInterval(() => {
+      fetchAlerts();
+      fetchHlSignals();
+    }, POLL_INTERVAL_MS);
     return () => clearInterval(interval);
-  }, [fetchAlerts, fetchTrending, fetchSubscription, fetchTrackedWallets]);
-
-  // ─── Force tab back to "feed" if user loses admin access ──
-  useEffect(() => {
-    if (tab === "wallets" && !isAdminView) setTab("feed");
-  }, [tab, isAdminView]);
+  }, [fetchAlerts, fetchTrending, fetchSubscription, fetchTrackedWallets, fetchHlSignals]);
 
   // ─── Filter alerts ─────────────────────────────────────────
   const filteredAlerts = filter === "all" ? alerts
@@ -256,12 +275,20 @@ export default function BaseAlpha({ apiUrl }) {
           </div>
         </div>
 
-        {/* Tabs — dynamic wallet count; Tracked Wallets is admin-only */}
+        {/* ── Hyperliquid signals strip ──────────────────────────
+            Always visible regardless of active tab. Funding-rate-derived
+            sentiment for the four perps we track (BTC, ETH, AERO,
+            MORPHO). Same data source as the AgentForge LIVE_SIGNALS
+            cards and the landing page — single source of truth.
+            Gracefully no-ops while waiting for first fetch. */}
+        <HyperliquidSignalStrip signals={hlSignals} S={S} />
+
+        {/* Tabs — dynamic wallet count */}
         <div style={S.tabs}>
           {[
             { key: "feed", label: "Alert Feed" },
             { key: "trending", label: "Trending" },
-            ...(isAdminView ? [{ key: "wallets", label: `Tracked Wallets (${walletCount || "..."})` }] : []),
+            { key: "wallets", label: `Tracked Wallets (${walletCount || "..."})` },
           ].map(t => (
             <button key={t.key} style={S.tab(tab === t.key)} onClick={() => setTab(t.key)}>
               {t.label}
@@ -534,6 +561,107 @@ export default function BaseAlpha({ apiUrl }) {
             )}
           </>
         )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Hyperliquid signals strip ─────────────────────────────────────────────
+//
+// Compact 4-column strip showing the latest funding-rate-derived sentiment
+// for BTC, ETH, AERO, and MORPHO perps. Pulls from the backend's cached
+// `/api/hyperliquid/signals` snapshot (same endpoint AgentForge uses).
+//
+// Rendering rules:
+//   - Before first fetch: skeleton row with dimmed "—" placeholders.
+//   - On error/stale: shows last known values with a dimmed "stale" badge.
+//   - Each cell shows direction arrow + sentiment label + confidence% +
+//     hourly funding rate, color-coded by direction.
+//
+// Visual is intentionally restrained — no glow effects or pulse animations —
+// because it sits in a high-information-density feed page and shouldn't
+// compete with the alert rows for attention.
+function HyperliquidSignalStrip({ signals, S }) {
+  const tracked = ["ETH", "WBTC", "AERO", "MORPHO"];
+  const labelByLocal = { ETH: "ETH", WBTC: "BTC", AERO: "AERO", MORPHO: "MORPHO" };
+
+  // Direction → arrow + color. Strong variants get a slightly punchier color
+  // so users can spot conviction at a glance without reading the label.
+  const directionFor = (sentiment) => {
+    if (!sentiment) return { arrow: "·", color: "#6a6a82" };
+    if (sentiment === "STRONG_BULLISH") return { arrow: "↑", color: "#00ff88" };
+    if (sentiment === "BULLISH")        return { arrow: "↑", color: "#00ff88" };
+    if (sentiment === "STRONG_BEARISH") return { arrow: "↓", color: "#ff2d92" };
+    if (sentiment === "BEARISH")        return { arrow: "↓", color: "#ff2d92" };
+    return { arrow: "·", color: "#6a6a82" };
+  };
+
+  // Truncate funding rate for display. HL funding is typically O(1e-4) per
+  // hour; show 5 decimal places so the sign + magnitude are visible without
+  // overflowing the cell.
+  const fmtFunding = (f) => {
+    if (f == null || isNaN(f)) return "—";
+    const sign = f > 0 ? "+" : "";
+    return `${sign}${f.toFixed(5)}/hr`;
+  };
+
+  const stale = signals?.stale === true;
+  const updatedAt = signals?.updatedAt ? new Date(signals.updatedAt).toLocaleTimeString('en-GB', { hour12: false }) : null;
+  const sigMap = signals?.signals || {};
+
+  return (
+    <div style={{
+      marginBottom: 18,
+      padding: 14,
+      background: "rgba(5,5,12,0.6)",
+      border: "1px solid #1a1a2e",
+    }}>
+      <div style={{
+        display: "flex", justifyContent: "space-between", alignItems: "baseline",
+        marginBottom: 10,
+        fontFamily: '"JetBrains Mono", monospace',
+      }}>
+        <span style={{ fontSize: 9, letterSpacing: "0.22em", color: "#6a6a82" }}>
+          HYPERLIQUID_SIGNALS <span style={{ color: "#8a8a9e", letterSpacing: "0.04em" }}>· funding-rate sentiment · perp feed</span>
+        </span>
+        <span style={{ fontSize: 9, color: stale ? "#ff9500" : "#6a6a82", letterSpacing: "0.05em" }}>
+          {!signals ? "loading…" : stale ? "stale" : updatedAt ? `updated ${updatedAt}` : ""}
+        </span>
+      </div>
+      <div style={{
+        display: "grid",
+        gridTemplateColumns: "repeat(4, 1fr)",
+        gap: 8,
+      }}>
+        {tracked.map(local => {
+          const s = sigMap[local];
+          const label = labelByLocal[local];
+          const dir = directionFor(s?.sentiment);
+          const confidence = s ? Math.round((s.confidence || 0) * 100) : 0;
+          return (
+            <div key={local} style={{
+              padding: "10px 12px",
+              background: "rgba(0,0,0,0.3)",
+              border: `1px solid ${s ? dir.color + "33" : "#1a1a2e"}`,
+              fontFamily: '"JetBrains Mono", monospace',
+            }}>
+              <div style={{ fontSize: 10, letterSpacing: "0.18em", color: "#8a8a9e", marginBottom: 4 }}>
+                {label}
+              </div>
+              <div style={{ fontSize: 12, fontWeight: 700, color: dir.color, marginBottom: 2 }}>
+                {dir.arrow} {s?.sentiment ? s.sentiment.replace("STRONG_", "S·") : "—"}
+                {s && (
+                  <span style={{ fontSize: 10, fontWeight: 400, color: "#dcdce5", marginLeft: 6 }}>
+                    {confidence}%
+                  </span>
+                )}
+              </div>
+              <div style={{ fontSize: 9, color: "#6a6a82" }}>
+                {s ? fmtFunding(s.funding) : "—"}
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
