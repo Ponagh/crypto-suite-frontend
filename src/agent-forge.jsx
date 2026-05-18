@@ -1734,6 +1734,104 @@ function CreateAgentModal({ open, onClose, onDeploy, currentSlots, maxSlots, isA
                 <input type="text" value={config[p] || ""} onChange={e => setConfig({ ...config, [p]: e.target.value })} placeholder={`Configure ${p.toLowerCase()}`} style={inputStyle(selected.color)} />
               </label>
             ))}
+
+            {/* ── Trade venue selector ──────────────────────────────────
+                Two execution paths:
+                  - DEX_SPOT: trades on Base via Aerodrome/Uniswap V3.
+                    Spot only — no leverage, no shorts. Existing default
+                    for every strategy.
+                  - HYPERLIQUID_PERP: trades on Hyperliquid perpetuals.
+                    Supports leverage and shorts. Requires the user to
+                    have deposited USDC on HL and authorized our agent
+                    wallet (see HL UI). Backend routes execution to
+                    hyperliquid-executor.js based on this config value.
+
+                For paper mode this is purely simulated either way, but
+                we still let users pick the venue so the simulation
+                respects venue-specific behavior (perp funding payments
+                accrue, leverage multiplies PnL, etc).
+
+                Defaulting to 'dex' keeps backwards compatibility — any
+                agent created without a venue field continues to behave
+                exactly as before. */}
+            <div style={{ marginBottom: 14, padding: 14, border: `1px solid ${selected.color}33`, background: "rgba(0,0,0,0.2)" }}>
+              <div style={{ fontSize: 9, letterSpacing: "0.2em", color: "#6a6a82", fontFamily: '"JetBrains Mono", monospace', marginBottom: 10 }}>
+                TRADE_VENUE
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                {[
+                  { id: 'dex',         label: '◇ DEX_SPOT',         sub: 'Aerodrome · Uniswap V3 · Base',   color: '#00ffee' },
+                  { id: 'hyperliquid', label: '▲ HYPERLIQUID_PERP', sub: 'Perpetual futures · with leverage', color: '#ff2d92' },
+                ].map(v => {
+                  const active = (config.venue || 'dex') === v.id;
+                  return (
+                    <button
+                      key={v.id}
+                      onClick={() => setConfig({ ...config, venue: v.id, leverage: v.id === 'hyperliquid' ? (config.leverage || 2) : undefined })}
+                      style={{
+                        padding: "10px 12px", textAlign: "left", cursor: "pointer",
+                        background: active ? `${v.color}15` : "transparent",
+                        color: active ? v.color : "#6a6a82",
+                        border: `1px solid ${active ? v.color : "#333"}`,
+                        fontFamily: '"JetBrains Mono", monospace',
+                      }}
+                    >
+                      <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", marginBottom: 4 }}>
+                        {v.label}
+                      </div>
+                      <div style={{ fontSize: 9, color: active ? v.color : "#6a6a82", opacity: 0.8 }}>
+                        {v.sub}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Leverage picker — only rendered when HL is selected. The
+                  backend clamps to HL_MAX_LEVERAGE (default 5 per env),
+                  so anything above the cap will be silently floored on
+                  execution. We surface only values within the typical
+                  cap range to avoid raising false expectations. */}
+              {config.venue === 'hyperliquid' && (
+                <div style={{ marginTop: 14 }}>
+                  <div style={{ fontSize: 9, letterSpacing: "0.2em", color: "#6a6a82", fontFamily: '"JetBrains Mono", monospace', marginBottom: 6 }}>
+                    LEVERAGE
+                  </div>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    {[1, 2, 3, 5].map(x => {
+                      const active = (config.leverage || 1) === x;
+                      const highRisk = x >= 3;
+                      const color = highRisk ? '#ff9500' : '#ff2d92';
+                      return (
+                        <button
+                          key={x}
+                          onClick={() => setConfig({ ...config, leverage: x })}
+                          style={{
+                            flex: 1, padding: "8px 0", cursor: "pointer",
+                            background: active ? `${color}15` : "transparent",
+                            color: active ? color : "#6a6a82",
+                            border: `1px solid ${active ? color : "#333"}`,
+                            fontFamily: '"JetBrains Mono", monospace',
+                            fontSize: 11, fontWeight: 700, letterSpacing: "0.05em",
+                          }}
+                        >
+                          {x}x
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {(config.leverage || 1) >= 3 && (
+                    <div style={{ marginTop: 8, padding: "6px 10px", background: "rgba(255,149,0,0.06)", border: "1px solid rgba(255,149,0,0.2)", fontSize: 9, color: "#ff9500", fontFamily: '"JetBrains Mono", monospace', letterSpacing: "0.04em", lineHeight: 1.5 }}>
+                      ⚠ HIGH_LEVERAGE · liquidation triggers at smaller adverse moves. A {config.leverage}x position is liquidated by a ~{(100 / config.leverage).toFixed(0)}% adverse price move.
+                    </div>
+                  )}
+                  <div style={{ marginTop: 8, fontSize: 9, color: "#6a6a82", fontFamily: '"JetBrains Mono", monospace', lineHeight: 1.5 }}>
+                    ▸ Live HL execution requires USDC deposited on Hyperliquid + agent wallet authorization. Paper mode simulates perp behavior including funding payments.
+                  </div>
+                </div>
+              )}
+            </div>
+
             <div style={{ marginTop: 20, padding: 14, border: `1px solid ${isAllowlisted ? "#ff2d92" : "#00ffee"}33`, background: "rgba(0,0,0,0.3)" }}>
               <div style={{ fontSize: 9, letterSpacing: "0.2em", color: "#6a6a82", fontFamily: '"JetBrains Mono", monospace', marginBottom: 10 }}>EXECUTION_MODE</div>
               <div style={{ display: "flex", gap: 8 }}>
