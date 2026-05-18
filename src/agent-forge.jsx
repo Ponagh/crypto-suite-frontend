@@ -1377,14 +1377,26 @@ function AgentCard({ agent, onPause, onResume, onDelete, onInspect, onEditPolicy
           </span>
         </div>
       </div>
+      {/*
+        Each metric block has its own click handler that opens the inspect
+        drawer focused on the relevant tab. stopPropagation prevents the
+        outer card click (which falls back to 'overview') from also firing
+        and clobbering the targeted tab.
+      */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 12, padding: "10px 0", borderTop: "1px solid #1a1a2e", borderBottom: "1px solid #1a1a2e" }}>
-        <Metric label="PNL" value={fmtUsd(agent.pnl)} sub={fmtPct(agent.pnl_pct)} color={pnlColor} />
-        <Metric label="TRADES" value={agent.trades_executed} color="#00ffee" />
-        <Metric label="CAPITAL" value={fmtUsd(agent.capital)} color="#dcdce5" />
+        <div onClick={(e) => { e.stopPropagation(); onInspect(agent, 'overview'); }} style={{ cursor: 'pointer' }} title="View overview">
+          <Metric label="PNL" value={fmtUsd(agent.pnl)} sub={fmtPct(agent.pnl_pct)} color={pnlColor} />
+        </div>
+        <div onClick={(e) => { e.stopPropagation(); onInspect(agent, 'trades'); }} style={{ cursor: 'pointer' }} title="View trade history">
+          <Metric label="TRADES" value={agent.trades_executed} color="#00ffee" />
+        </div>
+        <div onClick={(e) => { e.stopPropagation(); onInspect(agent, 'overview'); }} style={{ cursor: 'pointer' }} title="View overview">
+          <Metric label="CAPITAL" value={fmtUsd(agent.capital)} color="#dcdce5" />
+        </div>
       </div>
 
       {/* Wave 1 telemetry charts */}
-      <div style={{ marginBottom: 12 }}>
+      <div onClick={(e) => { e.stopPropagation(); onInspect(agent, 'equity'); }} style={{ marginBottom: 12, cursor: 'pointer' }} title="View equity detail">
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
           <span style={{ fontSize: 8, color: "#6a6a82", fontFamily: '"JetBrains Mono", monospace', letterSpacing: "0.12em" }}>EQUITY_CURVE</span>
           <span style={{ fontSize: 8, color: "#6a6a82", fontFamily: '"JetBrains Mono", monospace' }}>{(agent.series || []).length} pts</span>
@@ -1393,7 +1405,7 @@ function AgentCard({ agent, onPause, onResume, onDelete, onInspect, onEditPolicy
       </div>
 
       {/* Wave 2: Trade scatter */}
-      <div style={{ marginBottom: 12 }}>
+      <div onClick={(e) => { e.stopPropagation(); onInspect(agent, 'trades'); }} style={{ marginBottom: 12, cursor: 'pointer' }} title="View trades">
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 4 }}>
           <span style={{ fontSize: 8, color: "#6a6a82", fontFamily: '"JetBrains Mono", monospace', letterSpacing: "0.12em" }}>TRADE_SCATTER</span>
           <span style={{ fontSize: 8, color: "#6a6a82", fontFamily: '"JetBrains Mono", monospace' }}>{(agent.trades || []).length} trades</span>
@@ -1405,10 +1417,18 @@ function AgentCard({ agent, onPause, onResume, onDelete, onInspect, onEditPolicy
       <StrategyMiniRow agent={agent} signals={signals} />
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
-        <ConfidenceMini series={agent.series} currentScore={agent.confidence_score} color={agent.color} />
-        <DrawdownMini series={agent.series} currentDd={agent.drawdown_pct} color={agent.color} />
+        <div onClick={(e) => { e.stopPropagation(); onInspect(agent, 'overview'); }} style={{ cursor: 'pointer' }} title="View overview">
+          <ConfidenceMini series={agent.series} currentScore={agent.confidence_score} color={agent.color} />
+        </div>
+        <div onClick={(e) => { e.stopPropagation(); onInspect(agent, 'equity'); }} style={{ cursor: 'pointer' }} title="View drawdown detail">
+          <DrawdownMini series={agent.series} currentDd={agent.drawdown_pct} color={agent.color} />
+        </div>
       </div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 9, fontFamily: '"JetBrains Mono", monospace', color: "#6a6a82", letterSpacing: "0.05em" }}>
+      <div
+        onClick={(e) => { e.stopPropagation(); onInspect(agent, 'logs'); }}
+        style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 9, fontFamily: '"JetBrains Mono", monospace', color: "#6a6a82", letterSpacing: "0.05em", cursor: 'pointer' }}
+        title="View activity log"
+      >
         <span style={{ display: "inline-flex", alignItems: "center", gap: 4, maxWidth: "70%", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           <span style={{ color: agent.color }}>▸</span> {agent.last_action || "—"}
         </span>
@@ -2057,8 +2077,15 @@ function WalletFundingPanel({ agent, apiUrl }) {
   );
 }
 
-function AgentDetailDrawer({ agent, open, onClose, apiUrl, signals }) {
+function AgentDetailDrawer({ agent, open, onClose, apiUrl, signals, initialTab = 'overview' }) {
   const [logs, setLogs] = useState([]);
+  // Active tab inside the drawer. Reset whenever a new agent is opened OR
+  // the caller requests a different tab (e.g. user clicked TRADES count on
+  // the card vs INSPECT button — different initial tabs for same agent).
+  const [activeTab, setActiveTab] = useState(initialTab);
+  useEffect(() => {
+    if (open) setActiveTab(initialTab);
+  }, [open, initialTab, agent?.id]);
   useEffect(() => {
     if (!agent || !apiUrl) return;
     let cancelled = false;
@@ -2094,6 +2121,40 @@ function AgentDetailDrawer({ agent, open, onClose, apiUrl, signals }) {
           </div>
           <button onClick={onClose} style={{ background: "transparent", border: "1px solid #333", color: "#6a6a82", width: 32, height: 32, cursor: "pointer", fontSize: 18, fontFamily: "monospace" }}>×</button>
         </div>
+
+        {/* ── Tab bar ────────────────────────────────────────────────────
+            Four tabs: OVERVIEW (default — status/wallet/config/signals),
+            TRADES (history table), EQUITY (full sparkline + drawdown),
+            LOGS (activity log). Clicking different metric blocks on the
+            agent card opens to the relevant tab; INSPECT button and outer
+            card click default to OVERVIEW. */}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 0, marginBottom: 22, borderBottom: "1px solid #1a1a2e" }}>
+          {[
+            { id: 'overview', label: 'OVERVIEW' },
+            { id: 'trades',   label: 'TRADES' },
+            { id: 'equity',   label: 'EQUITY' },
+            { id: 'logs',     label: 'LOGS' },
+          ].map(t => (
+            <button
+              key={t.id}
+              onClick={() => setActiveTab(t.id)}
+              style={{
+                padding: "10px 6px", background: "transparent",
+                border: "none", borderBottom: activeTab === t.id ? `2px solid ${agent.color}` : "2px solid transparent",
+                color: activeTab === t.id ? agent.color : "#6a6a82",
+                fontFamily: '"JetBrains Mono", monospace',
+                fontSize: 9, letterSpacing: "0.18em", fontWeight: activeTab === t.id ? 700 : 400,
+                cursor: "pointer", textAlign: "center",
+                transition: "color 0.15s ease, border-bottom-color 0.15s ease",
+              }}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+
+        {/* ── OVERVIEW tab ──────────────────────────────────────────── */}
+        {activeTab === 'overview' && (<>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 22 }}>
           <DetailBox label="STATUS" value={agent.status.toUpperCase()} color={agent.status === "running" ? "#00ff88" : "#ff9500"} />
           <DetailBox label="UPTIME" value={`${Math.floor((Date.now() - agent.deployedAtMs) / 60000)}m`} color="#00ffee" />
@@ -2122,11 +2183,109 @@ function AgentDetailDrawer({ agent, open, onClose, apiUrl, signals }) {
             )}
           </div>
         </div>
+        </>)}
+
+        {/* ── TRADES tab ─────────────────────────────────────────────
+            Shows the agent.trades array (already populated by the dashboard
+            endpoint) as a readable table. Rows are clipped to last 50 to
+            keep the drawer scrollable without paginating. */}
+        {activeTab === 'trades' && (
+          <div style={{ marginBottom: 22 }}>
+            <div style={{ fontSize: 10, letterSpacing: "0.2em", color: "#6a6a82", fontFamily: '"JetBrains Mono", monospace', marginBottom: 10 }}>
+              TRADE_HISTORY <span style={{ color: "#8a8a9e" }}>· {(agent.trades || []).length} total</span>
+            </div>
+            <div style={{ background: "rgba(5,5,12,0.8)", border: "1px solid #1a1a2e", fontFamily: '"JetBrains Mono", monospace', fontSize: 10, maxHeight: 520, overflowY: "auto" }}>
+              {(!agent.trades || agent.trades.length === 0) ? (
+                <div style={{ padding: 20, textAlign: "center", color: "#6a6a82" }}>[ NO_TRADES_YET ]</div>
+              ) : (
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr style={{ borderBottom: "1px solid #1a1a2e", color: "#6a6a82", letterSpacing: "0.12em", fontSize: 9 }}>
+                      <th style={{ padding: "8px 10px", textAlign: "left",  fontWeight: 400 }}>TIME</th>
+                      <th style={{ padding: "8px 10px", textAlign: "left",  fontWeight: 400 }}>SIDE</th>
+                      <th style={{ padding: "8px 10px", textAlign: "left",  fontWeight: 400 }}>TOKEN</th>
+                      <th style={{ padding: "8px 10px", textAlign: "right", fontWeight: 400 }}>AMOUNT</th>
+                      <th style={{ padding: "8px 10px", textAlign: "right", fontWeight: 400 }}>PNL</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(agent.trades || []).slice(-50).reverse().map((t, i) => {
+                      // Be defensive about field names — the trades array
+                      // shape can vary slightly across strategies (DCA vs
+                      // Sentiment vs Grid). Render what we can find.
+                      const ts = t.executed_at || t.created_at || t.timestamp;
+                      const timeLabel = ts ? new Date(ts).toLocaleTimeString('en-GB', { hour12: false }) : '—';
+                      const dateLabel = ts ? new Date(ts).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }) : '';
+                      const side = (t.side || t.action || (t.is_buy ? 'buy' : 'sell') || '').toUpperCase();
+                      const sideColor = side === 'BUY' || side === 'LONG' ? "#00ff88" : side === 'SELL' || side === 'SHORT' ? "#ff2d92" : "#dcdce5";
+                      const token = t.token_symbol || t.symbol || t.token || '—';
+                      const amount = t.amount_usd != null ? `$${Number(t.amount_usd).toFixed(2)}`
+                                   : t.size_usd   != null ? `$${Number(t.size_usd).toFixed(2)}`
+                                   : t.amount     != null ? Number(t.amount).toFixed(4)
+                                   : '—';
+                      const pnl = t.pnl_usd != null ? Number(t.pnl_usd)
+                                : t.pnl     != null ? Number(t.pnl)
+                                : null;
+                      const pnlStr = pnl != null ? (pnl >= 0 ? '+' : '') + '$' + pnl.toFixed(2) : '—';
+                      const pnlColor = pnl == null ? "#6a6a82" : pnl >= 0 ? "#00ff88" : "#ff2d92";
+                      return (
+                        <tr key={t.id || i} style={{ borderBottom: "1px solid #0d0d1e" }}>
+                          <td style={{ padding: "6px 10px", color: "#8a8a9e" }}>
+                            <div>{timeLabel}</div>
+                            <div style={{ fontSize: 8, color: "#6a6a82" }}>{dateLabel}</div>
+                          </td>
+                          <td style={{ padding: "6px 10px", color: sideColor, fontWeight: 700 }}>{side || '—'}</td>
+                          <td style={{ padding: "6px 10px", color: "#dcdce5" }}>{token}</td>
+                          <td style={{ padding: "6px 10px", textAlign: "right", color: "#dcdce5" }}>{amount}</td>
+                          <td style={{ padding: "6px 10px", textAlign: "right", color: pnlColor }}>{pnlStr}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ── EQUITY tab ───────────────────────────────────────────── */}
+        {activeTab === 'equity' && (
+          <div style={{ marginBottom: 22 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
+              <DetailBox label="PNL"      value={fmtUsd(agent.pnl)}    sub={fmtPct(agent.pnl_pct)} color={agent.pnl >= 0 ? "#00ff88" : "#ff2d92"} />
+              <DetailBox label="DRAWDOWN" value={`${(agent.drawdown_pct || 0).toFixed(2)}%`} color={(agent.drawdown_pct || 0) > 15 ? "#ff2d92" : "#dcdce5"} />
+              <DetailBox label="CAPITAL"  value={fmtUsd(agent.capital)} color="#dcdce5" />
+              <DetailBox label="TRADES"   value={agent.trades_executed} color="#00ffee" />
+            </div>
+            <div style={{ marginBottom: 18 }}>
+              <div style={{ fontSize: 10, letterSpacing: "0.2em", color: "#6a6a82", fontFamily: '"JetBrains Mono", monospace', marginBottom: 8 }}>
+                EQUITY_CURVE <span style={{ color: "#8a8a9e" }}>· {(agent.series || []).length} points</span>
+              </div>
+              {/* Reuse the existing sparkline component but at full drawer width.
+                  EquitySparkline is sized by its container, so wrapping it in a
+                  taller div gives us a bigger chart for free. */}
+              <div style={{ height: 180, background: "rgba(5,5,12,0.8)", border: "1px solid #1a1a2e", padding: 8 }}>
+                <EquitySparkline series={agent.series} color={agent.color} />
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize: 10, letterSpacing: "0.2em", color: "#6a6a82", fontFamily: '"JetBrains Mono", monospace', marginBottom: 8 }}>
+                CONFIDENCE_TREND
+              </div>
+              <div style={{ height: 100, background: "rgba(5,5,12,0.8)", border: "1px solid #1a1a2e", padding: 8 }}>
+                <ConfidenceMini series={agent.series} currentScore={agent.confidence_score} color={agent.color} />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── LOGS tab ─────────────────────────────────────────────── */}
+        {activeTab === 'logs' && (
         <div>
           <div style={{ fontSize: 10, letterSpacing: "0.2em", color: "#6a6a82", fontFamily: '"JetBrains Mono", monospace', marginBottom: 10 }}>
             ACTIVITY_LOG <span style={{ color: "#8a8a9e" }}>· live · last {logs.length}</span>
           </div>
-          <div style={{ padding: 14, background: "rgba(5,5,12,0.8)", border: "1px solid #1a1a2e", fontFamily: '"JetBrains Mono", monospace', fontSize: 10, lineHeight: 1.7, maxHeight: 360, overflowY: "auto" }}>
+          <div style={{ padding: 14, background: "rgba(5,5,12,0.8)", border: "1px solid #1a1a2e", fontFamily: '"JetBrains Mono", monospace', fontSize: 10, lineHeight: 1.7, maxHeight: 520, overflowY: "auto" }}>
             {logs.length === 0 ? (
               <div style={{ color: "#6a6a82" }}>Waiting for first tick...</div>
             ) : logs.map(log => {
@@ -2146,6 +2305,7 @@ function AgentDetailDrawer({ agent, open, onClose, apiUrl, signals }) {
             </div>
           </div>
         </div>
+        )}
       </div>
     </div>
   );
@@ -2169,6 +2329,18 @@ export default function AgentForge({ apiUrl }) {
   const [range, setRange] = useState("all");        // Wave 1: chart time horizon — 24h | 7d | 30d | all
   const [createOpen, setCreateOpen] = useState(false);
   const [inspectAgent, setInspectAgent] = useState(null);
+  // Which tab to open the drawer on. Reset to 'overview' whenever a new
+  // agent is opened so we don't accidentally remember a previous tab choice.
+  const [inspectTab, setInspectTab] = useState('overview');
+  // Helper: open the drawer focused on a specific tab. Used by metric
+  // click handlers on the card — clicking TRADES opens to the trades tab,
+  // clicking EQUITY_CURVE opens to the equity tab, etc. Defaults to
+  // 'overview' so existing call sites (card outer click, INSPECT button)
+  // keep working unchanged.
+  const openInspect = useCallback((agent, tab = 'overview') => {
+    setInspectAgent(agent);
+    setInspectTab(tab);
+  }, []);
   const [policyAgent, setPolicyAgent] = useState(null);          // S3: which agent's policy is being edited
   const [policyInitialTab, setPolicyInitialTab] = useState("risk");
   const [isAllowlisted, setIsAllowlisted] = useState(false);
@@ -2525,7 +2697,7 @@ export default function AgentForge({ apiUrl }) {
               onPause={handlePause}
               onResume={handleResume}
               onDelete={handleDelete}
-              onInspect={setInspectAgent}
+              onInspect={openInspect}
               onEditPolicy={handleEditPolicy}
               onHalt={handleHalt}
               onUnhalt={handleUnhalt}
@@ -2538,7 +2710,7 @@ export default function AgentForge({ apiUrl }) {
 
       <CreateAgentModal open={createOpen} onClose={() => setCreateOpen(false)} onDeploy={handleStartDeploy} currentSlots={agents.length} maxSlots={tierMeta.allowed} isAllowlisted={isAllowlisted} deploying={deploying} />
       <RiskAgreementModal open={riskOpen} template={pendingDeploy?.template} capital={Number(pendingDeploy?.config?.capital) || 500} mode={pendingDeploy?.mode} onSign={handleSignAgreement} onCancel={() => { setRiskOpen(false); setPendingDeploy(null); }} signing={signing} />
-      <AgentDetailDrawer agent={inspectAgent} open={!!inspectAgent} onClose={() => setInspectAgent(null)} apiUrl={apiUrl} signals={liveSignals} />
+      <AgentDetailDrawer agent={inspectAgent} open={!!inspectAgent} onClose={() => setInspectAgent(null)} apiUrl={apiUrl} signals={liveSignals} initialTab={inspectTab} />
       <EditPolicyModal
         open={!!policyAgent}
         agent={policyAgent}
